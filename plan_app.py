@@ -5,7 +5,7 @@ import math
 import heapq
 
 # --- USTAWIENIA STRONY ---
-st.set_page_config(page_title="Interaktywny Plan Zajęć ❤️", page_icon="📅", layout="centered")
+st.set_page_config(page_title="Plan Zajęć ❤️", page_icon="📅", layout="centered")
 
 # --- AUTO-ODŚWIEŻANIE (60 s) ---
 try:
@@ -125,7 +125,7 @@ def assign_columns_and_clusters(evts):
 # --- APLIKACJA ---
 try:
     df = load_data("plan_zajec.xlsx")
-    st.title("Interaktywny Plan Zajęć")
+    st.title("Plan Zajęć ❤️")
 
     today = datetime.now().date()
     if 'current_week_start' not in st.session_state:
@@ -258,3 +258,4 @@ except Exception as e:
     st.error(f"Wystąpił nieoczekiwany błąd: {e}")
 st.markdown("---")
 st.write("Made with ❤️ for you!")
+
