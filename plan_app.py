@@ -125,7 +125,7 @@ st.markdown("""
 
 # --- Logika aplikacji ---
 try:
-    df = load_data("plan_zajec.xlsx")
+    df = load_data("PI_s_II_26_09_2025 (1).xlsx")
 
     # Inicjalizacja stanu sesji
     if 'current_week_start' not in st.session_state:
@@ -215,3 +215,4 @@ except FileNotFoundError:
     st.error("Nie znaleziono pliku `plan_zajec.xlsx`. Upewnij się, że plik znajduje się w repozytorium na GitHubie.")
 except Exception as e:
     st.error(f"Wystąpił nieoczekiwany błąd: {e}")
+
