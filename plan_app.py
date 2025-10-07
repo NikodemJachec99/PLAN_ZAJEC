@@ -48,13 +48,19 @@ def load_data(file_path: str) -> pd.DataFrame:
     df.sort_values(by=['date', 'start_time_obj'], inplace=True)
     return df
 
-# --- STYLE (z responsywnym mobile) ---
+# --- STYLE (desktop + mobile + zoom wrapper) ---
 st.markdown("""
 <style>
   .stApp > header { background-color: transparent; }
   .main .block-container { padding: 0.75rem 0.75rem 4rem 0.75rem; }
   h1 { text-align:center; color:#1a202c; margin-bottom:1.0rem; }
   .week-range { text-align:center; font-size:1.25rem; font-weight:600; color:#2d3748; margin:0.25rem 0 0.75rem; }
+
+  /* Zoom wrapper: skaluje całość i kompensuje szerokość by nie było poziomego scrola */
+  .zoom-wrap {
+    transform-origin: top left;
+    /* transform ustawiamy inline w Pythonie: scale(var) */
+  }
 
   .day-layout { display:grid; grid-template-columns:88px 1fr; gap:1rem; align-items:start; }
 
@@ -83,7 +89,6 @@ st.markdown("""
     .event { padding:6px 8px; border-radius:10px; }
     .event .title { font-size:.9rem; }
     .event .meta { font-size:.72rem; }
-    /* przyciski mniejsze */
     .stButton>button { padding:0.35rem 0.5rem !important; font-size:.9rem !important; }
   }
 </style>
@@ -97,7 +102,7 @@ def assign_columns_and_clusters(evts):
     """Nadaje kolumny i identyfikuje klastry (ciągi nakładających się eventów)."""
     result = []
     active = []        # min-heap po end_min: (end_min, col, idx)
-    free_cols = []     # min-heap z wolnymi numerami kolumn
+    free_cols = []     # lista wolnych kolumn (małe numery preferowane)
     next_col = 0
     clusters, current_cluster = [], []
 
@@ -169,15 +174,20 @@ try:
         st.rerun()
 
     # ⚙️ Ustawienia widoku
-    colA, colB = st.columns([1,1])
-    with colA:
+    cA, cB, cC = st.columns([1,1,1])
+    with cA:
         if 'hour_height' not in st.session_state:
-            st.session_state.hour_height = 110  # odrobinę bardziej kompaktowo
+            st.session_state.hour_height = 110
         st.session_state.hour_height = st.slider("Wysokość 1h (px)", 60, 220, st.session_state.hour_height, step=10)
-    with colB:
-        compact_range = st.checkbox("Kompaktowy zakres (wg zajęć)", True, help="Przytnij widok do godzin, w których są zajęcia (+/- 15 min)")
-
+    with cB:
+        compact_range = st.checkbox("Kompaktowy zakres (wg zajęć)", True)
+    with cC:
+        if 'ui_scale' not in st.session_state:
+            st.session_state.ui_scale = 100
+        st.session_state.ui_scale = st.slider("Skala widoku (%)", 60, 120, st.session_state.ui_scale, step=5,
+                                              help="Zmniejsz, aby zmieścić więcej na ekranie")
     PX_PER_MIN = st.session_state.hour_height / 60.0
+    scale = max(0.6, min(1.2, st.session_state.ui_scale / 100.0))
 
     # Zakładki dni
     days_of_week_pl = ["Pon", "Wt", "Śr", "Czw", "Pt", "Sob", "Niedz"]
@@ -195,22 +205,22 @@ try:
 
     # ---- OŚ CZASU + PŁÓTNO KALENDARZA ----
     base_start, base_end = dtime(7, 0), dtime(21, 0)
+    base_start_m, base_end_m = to_minutes(base_start), to_minutes(base_end)
 
-    # Wyznacz zakres czasu (mobilnie: wg zajęć)
-    base_start_m = to_minutes(base_start)
-    base_end_m   = to_minutes(base_end)
+    # Zakres czasu (kompaktowy wg zajęć, z marginesem)
     if not day_events.empty and compact_range:
         ev_start_m = min(day_events['start_time_obj'].dropna().map(to_minutes))
         ev_end_m   = max(day_events['end_time_obj'].dropna().map(to_minutes))
-        # margines +/- 15 min, zaokrąglenia do pełnej godziny
         start_m = max(base_start_m, int(math.floor((ev_start_m - 15) / 60) * 60))
         end_m   = min(base_end_m,  int(math.ceil((ev_end_m + 15) / 60) * 60))
     else:
-        # dotychczasowa logika
-        ev_min = day_events['start_time_obj'].dropna() if not day_events.empty else []
-        ev_max = day_events['end_time_obj'].dropna() if not day_events.empty else []
-        start_m = min([base_start_m] + ([min(map(to_minutes, ev_min))] if len(ev_min) else [])) if not day_events.empty else base_start_m
-        end_m   = max([base_end_m]   + ([max(map(to_minutes, ev_max))] if len(ev_max) else [])) if not day_events.empty else base_end_m
+        if not day_events.empty:
+            ev_min = day_events['start_time_obj'].dropna()
+            ev_max = day_events['end_time_obj'].dropna()
+            start_m = min([base_start_m] + ([min(map(to_minutes, ev_min))] if len(ev_min) else []))
+            end_m   = max([base_end_m]   + ([max(map(to_minutes, ev_max))] if len(ev_max) else []))
+        else:
+            start_m, end_m = base_start_m, base_end_m
 
     duration = max(60, end_m - start_m)
     height_px = duration * PX_PER_MIN
@@ -273,14 +283,21 @@ try:
             f"<div class='now-badge' style='top:{top_now:.2f}px'>Teraz {now_dt_line.strftime('%H:%M')}</div>"
         )
 
-    # Layout
+    # Layout + ZOOM WRAP (kompensacja szerokości)
     day_layout_html = (
         f"<div class='day-layout' style='--day-height:{height_px:.2f}px'>"
         f"<div class='timeline-rail'><div class='timeline-rail-inner' style='height:{height_px:.2f}px'>{''.join(ticks_html)}</div></div>"
         f"<div class='calendar-canvas' style='min-height:{height_px:.2f}px'>{now_wide_html}{events_html if events_html else '<div style=\"padding:12px;color:#64748b;\">Brak zajęć</div>'}</div>"
         f"</div>"
     )
-    st.markdown(day_layout_html, unsafe_allow_html=True)
+
+    # Opakowanie w zoom: transform:scale(S) i width: calc(100% / S) => brak poziomego scrolla
+    zoom_wrapper = (
+        f"<div class='zoom-wrap' style='transform:scale({scale});width:calc(100% / {scale});'>"
+        f"{day_layout_html}"
+        f"</div>"
+    )
+    st.markdown(zoom_wrapper, unsafe_allow_html=True)
 
 except FileNotFoundError:
     st.error("Nie znaleziono pliku `plan_zajec.xlsx`. Upewnij się, że plik znajduje się w repozytorium.")
