@@ -3,6 +3,7 @@ import pandas as pd
 from datetime import datetime, timedelta, time as dtime
 import math
 import heapq
+import pytz
 
 # --- USTAWIENIA STRONY ---
 st.set_page_config(page_title="Plan Zajęć ❤️", page_icon="📅", layout="centered")
@@ -260,5 +261,6 @@ except Exception as e:
     st.error(f"Wystąpił nieoczekiwany błąd: {e}")
 st.markdown("---")
 st.write("Made with ❤️ for you!")
+
 
 
