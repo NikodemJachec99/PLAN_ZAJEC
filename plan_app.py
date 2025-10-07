@@ -3,12 +3,11 @@ import pandas as pd
 from datetime import datetime, timedelta, timezone, time as dtime
 import math
 import heapq
-import html
 from zoneinfo import ZoneInfo
 
 # --- STAŁE DLA GĘSTOŚCI WIDOKU ---
-HOUR_HEIGHT_PX = 65
-COMPACT_RANGE  = True
+HOUR_HEIGHT_PX = 65         # 1h = 65px
+COMPACT_RANGE = True        # przycinaj widok do zakresu zajęć (+/- 15 min)
 TZ_WA = ZoneInfo("Europe/Warsaw")
 
 # --- USTAWIENIA STRONY ---
@@ -41,9 +40,7 @@ def load_data(file_path: str) -> pd.DataFrame:
     df['instructor'] = (
         df['degree'].fillna('') + ' ' + df['first_name'].fillna('') + ' ' + df['last_name'].fillna('')
     ).str.strip()
-    
-    # --- POPRAWKA: Czyszczenie nazw grup z niewidocznych spacji ---
-    df['group'] = df['group'].fillna('---').astype(str).str.strip()
+    df['group'] = df['group'].fillna('---').astype(str)
 
     df['start_time_obj'] = pd.to_datetime(df['start_time'], format='%H:%M:%S', errors='coerce').dt.time
     df['end_time_obj']   = pd.to_datetime(df['end_time'],   format='%H:%M:%S', errors='coerce').dt.time
@@ -53,39 +50,51 @@ def load_data(file_path: str) -> pd.DataFrame:
     df.sort_values(by=['date', 'start_time_obj'], inplace=True)
     return df
 
-# --- STYLE ---
+# --- STYLE: globalnie mniejsze, gęstsze, mniejsze przyciski ---
 st.markdown("""
 <style>
-  html { font-size: 13.5px; }
+  html { font-size: 14px; }
   body, .stApp { line-height: 1.25; }
   .stApp > header { background-color: transparent; }
-  .main .block-container { padding: 0.45rem 0.55rem 3rem 0.55rem; }
-  h1 { text-align:center; color:#1a202c; margin-bottom:0.55rem; font-size:1.28rem; }
-  .week-range { text-align:center; font-size:1.0rem; font-weight:600; color:#2d3748; margin:0.15rem 0 0.5rem; }
-  .day-layout { display:grid; grid-template-columns:64px 1fr; gap:0.5rem; align-items:start; }
-  .timeline-rail { position:sticky; top:0; width:64px; border-right:2px solid #e2e8f0; }
+  .main .block-container { padding: 0.5rem 0.6rem 3rem 0.6rem; }
+  h1 { text-align:center; color:#1a202c; margin-bottom:0.6rem; font-size:1.35rem; }
+  .week-range { text-align:center; font-size:1.05rem; font-weight:600; color:#2d3748; margin:0.2rem 0 0.6rem; }
+
+  .stButton>button {
+    padding: 0.25rem 0.5rem !important;
+    font-size: 0.85rem !important;
+    line-height: 1.1 !important;
+    border-radius: 8px !important;
+  }
+
+  .day-layout { display:grid; grid-template-columns:70px 1fr; gap:0.6rem; align-items:start; }
+
+  .timeline-rail { position:sticky; top:0; width:70px; border-right:2px solid #e2e8f0; }
   .timeline-rail-inner { position:relative; height:var(--day-height, 720px); }
   .tick { position:absolute; left:0; right:0; border-top:1px dashed #e2e8f0; }
-  .tick-label { position:absolute; left:0; width:54px; text-align:right; font-size:0.68rem; color:#94a3b8; transform:translateY(-50%); padding-right:4px; }
+  .tick-label { position:absolute; left:0; width:60px; text-align:right; font-size:0.72rem; color:#94a3b8; transform:translateY(-50%); padding-right:4px; }
+
   .calendar-canvas { position:relative; min-height:var(--day-height, 720px); border-left:2px solid #e2e8f0; }
   .event {
-    position:absolute; box-sizing:border-box; padding:5px 7px;
-    background:#0ea5e910; border:1px solid #38bdf8; border-radius:9px;
+    position:absolute; box-sizing:border-box; padding:6px 8px;
+    background:#0ea5e910; border:1px solid #38bdf8; border-radius:10px;
     overflow:hidden; box-shadow:0 1px 2px rgba(0,0,0,.05);
   }
-  .event .title { font-weight:700; color:#0f172a; margin-bottom:1px; font-size:0.9rem; }
-  .event .meta { font-size:.68rem; color:#334155; line-height:1.12; }
+  .event .title { font-weight:700; color:#0f172a; margin-bottom:1px; font-size:0.92rem; }
+  .event .meta { font-size:.72rem; color:#334155; line-height:1.15; }
+
   .now-line-wide { position:absolute; left:0; right:0; border-top:2px solid #ef4444; z-index:3; }
-  .now-badge { position:absolute; right:6px; transform:translateY(-100%); font-size:.66rem; color:#ef4444; z-index:4; background:transparent; }
+  .now-badge { position:absolute; right:6px; transform:translateY(-100%); font-size:.7rem; color:#ef4444; z-index:4; background:transparent; }
+
   @media (max-width: 640px) {
-    html { font-size: 12.8px; }
-    .day-layout { grid-template-columns:52px 1fr; gap:0.4rem; }
-    .timeline-rail { width:52px; }
-    .tick-label { width:46px; font-size:.64rem; }
-    .event { padding:4px 6px; border-radius:8px; }
-    .event .title { font-size:.86rem; }
-    .event .meta { font-size:.64rem; }
-    .stButton>button { padding:0.18rem 0.4rem !important; font-size:.78rem !important; }
+    html { font-size: 13px; }
+    .day-layout { grid-template-columns:56px 1fr; gap:0.45rem; }
+    .timeline-rail { width:56px; }
+    .tick-label { width:48px; font-size:.68rem; }
+    .event { padding:5px 7px; border-radius:8px; }
+    .event .title { font-size:.88rem; }
+    .event .meta { font-size:.68rem; }
+    .stButton>button { padding:0.22rem 0.45rem !important; font-size:.82rem !important; }
   }
 </style>
 """, unsafe_allow_html=True)
@@ -94,21 +103,66 @@ st.markdown("""
 def to_minutes(t: dtime) -> int:
     return t.hour * 60 + t.minute
 
+def assign_columns_and_clusters(evts):
+    """Nadaje kolumny i identyfikuje klastry (ciągi nakładających się eventów)."""
+    result = []
+    active = []        # min-heap po end_min: (end_min, col, idx)
+    free_cols = []     # lista wolnych kolumn
+    next_col = 0
+    clusters, current_cluster = [], []
+
+    for idx, ev in enumerate(evts):
+        while active and active[0][0] <= ev["start_min"]:
+            _, col_finished, _ = heapq.heappop(active)
+            free_cols.append(col_finished)
+            free_cols.sort()
+        if not active and current_cluster:
+            clusters.append(current_cluster)
+            current_cluster = []
+
+        col = free_cols.pop(0) if free_cols else next_col
+        if col == next_col: next_col += 1
+
+        heapq.heappush(active, (ev["end_min"], col, idx))
+        result.append({**ev, "col": col, "cluster_id": -1})
+        current_cluster.append((idx, ev["start_min"], ev["end_min"], col))
+
+    if current_cluster:
+        clusters.append(current_cluster)
+
+    cluster_cols = {}
+    for c_id, items in enumerate(clusters):
+        points = []
+        for _, s, e, _ in items:
+            points.append((s, 1))
+            points.append((e, -1))
+        points.sort(key=lambda x: (x[0], -x[1]))
+        cur = peak = 0
+        for _, d in points:
+            cur += d
+            peak = max(peak, cur)
+        cluster_cols[c_id] = max(1, peak)
+        for idx, *_ in items:
+            result[idx]["cluster_id"] = c_id
+
+    return result, cluster_cols
+
 # --- APLIKACJA ---
 try:
     df = load_data("plan_zajec.xlsx")
     st.title("Plan Zajęć ❤️")
 
-    filter_magdalenka = st.checkbox("Grupy Magdalenki")
-    
+    # Czas Warszawy
     now_dt = datetime.now(timezone.utc).astimezone(TZ_WA)
     today = now_dt.date()
 
+    # Stan sesji
     if 'current_week_start' not in st.session_state:
         st.session_state.current_week_start = today - timedelta(days=today.weekday())
-    if 'selected_day_offset' not in st.session_state:
-        st.session_state.selected_day_offset = min(today.weekday(), 4)
+    if 'selected_day_index' not in st.session_state:
+        st.session_state.selected_day_index = today.weekday()
 
+    # Nawigacja tygodnia
     week_start = st.session_state.current_week_start
     week_end = week_start + timedelta(days=6)
 
@@ -118,33 +172,55 @@ try:
         st.rerun()
     if nav_cols[1].button("📍 Dziś", use_container_width=True):
         st.session_state.current_week_start = today - timedelta(days=today.weekday())
-        st.session_state.selected_day_offset = min(today.weekday(), 4)
+        st.session_state.selected_day_index = today.weekday()
         st.rerun()
     nav_cols[2].markdown(f"<div class='week-range'>{week_start.strftime('%d.%m')} – {week_end.strftime('%d.%m.%Y')}</div>", unsafe_allow_html=True)
     if nav_cols[3].button("Następny ➡️", use_container_width=True):
         st.session_state.current_week_start += timedelta(days=7)
         st.rerun()
 
+    # ✅ Checkbox do filtrowania „grupy Magdalenki”
+    filter_magdalenki = st.checkbox("grupy Magdalenki", value=False)
+
+    # Skala pionowa (bez suwaka)
     PX_PER_MIN = HOUR_HEIGHT_PX / 60.0
 
-    days_of_week_pl = ["Pon", "Wt", "Śr", "Czw", "Pt"]
-    visible_offsets = [0, 1, 2, 3, 4]
+    # Zakładki dni (Pon–Pt)
+    days_of_week_pl = ["Pon", "Wt", "Śr", "Czw", "Pt", "Sob", "Niedz"]
+    visible_offsets = [0, 1, 2, 3, 4]  # bez sob/ndz jak wcześniej
     day_tabs = st.columns(len(visible_offsets))
     for i, off in enumerate(visible_offsets):
         current_day_date = week_start + timedelta(days=off)
-        if day_tabs[i].button(f"{days_of_week_pl[off]} {current_day_date.day}", use_container_width=True, type=("primary" if st.session_state.selected_day_offset == off else "secondary")):
-            st.session_state.selected_day_offset = off
+        if day_tabs[i].button(f"{days_of_week_pl[off]} {current_day_date.day}", use_container_width=True):
+            st.session_state.selected_day_index = off
             st.rerun()
 
-    selected_day_date = week_start + timedelta(days=st.session_state.selected_day_offset)
-    day_events = df[df['date'].dt.date == selected_day_date]
+    # --- Filtrowanie wg „grupy Magdalenki” ---
+    df_src = df
+    if filter_magdalenki:
+        def _is_whole_year(g: str) -> bool:
+            s = (g or "").strip().lower()
+            # w tym projekcie puste -> '---'
+            return (s in {"---", "rok", "wszyscy", "all", "year"}) or ("rok" in s) or ("wsz" in s)
 
-    if filter_magdalenka:
-        magdalenka_groups = ['1', 'd', 'cały rok']
-        day_events = day_events[day_events['group'].isin(magdalenka_groups)]
+        def _keep_row(grp: str) -> bool:
+            s = (grp or "").strip().lower()
+            if _is_whole_year(s):
+                return True
+            # jeśli wygląda na numeryczny schemat (zawiera cyfry) → bierzemy tylko '1' (np. '1', '1a' też przejdzie)
+            if any(ch.isdigit() for ch in s):
+                return s == "1" or s.startswith("1")
+            # w przeciwnym razie traktujemy jako literowy → bierzemy tylko 'd'
+            return s == "d" or s.startswith("d")
 
+        df_src = df[df["group"].apply(_keep_row)]
+
+    # Dane dnia (po filtrze)
+    selected_day_date = week_start + timedelta(days=st.session_state.selected_day_index)
+    day_events = df_src[df_src['date'].dt.date == selected_day_date]
     st.markdown(f"### {selected_day_date.strftime('%A, %d.%m.%Y')}")
 
+    # ---- OŚ CZASU + PŁÓTNO KALENDARZA ----
     base_start, base_end = dtime(7, 0), dtime(21, 0)
     base_start_m, base_end_m = to_minutes(base_start), to_minutes(base_end)
 
@@ -152,85 +228,99 @@ try:
         ev_start_m = min(day_events['start_time_obj'].dropna().map(to_minutes))
         ev_end_m   = max(day_events['end_time_obj'].dropna().map(to_minutes))
         start_m = max(base_start_m, int(math.floor((ev_start_m - 15) / 60) * 60))
-        end_m   = min(base_end_m,   int(math.ceil((ev_end_m + 15) / 60) * 60))
+        end_m   = min(base_end_m,  int(math.ceil((ev_end_m + 15) / 60) * 60))
     else:
-        start_m, end_m = base_start_m, base_end_m
+        if not day_events.empty:
+            ev_min = day_events['start_time_obj'].dropna()
+            ev_max = day_events['end_time_obj'].dropna()
+            start_m = min([base_start_m] + ([min(map(to_minutes, ev_min))] if len(ev_min) else []))
+            end_m   = max([base_end_m]   + ([max(map(to_minutes, ev_max))] if len(ev_max) else []))
+        else:
+            start_m, end_m = base_start_m, base_end_m
 
     duration = max(60, end_m - start_m)
     height_px = duration * PX_PER_MIN
 
-    ticks_html = []
+    # Godzinowe ticki (lewa szyna)
     first_tick_h = math.ceil(start_m / 60)
     last_tick_h  = math.floor(end_m / 60)
+    ticks_html = []
     for h in range(first_tick_h, last_tick_h + 1):
         top = (h * 60 - start_m) * PX_PER_MIN
         ticks_html.append(f"<div class='tick' style='top:{top:.2f}px'></div>")
         ticks_html.append(f"<div class='tick-label' style='top:{top:.2f}px'>{h:02d}:00</div>")
 
+    # Eventy źródłowe
     events = []
     for _, e in day_events.iterrows():
-        if pd.isna(e['start_time_obj']) or pd.isna(e['end_time_obj']): continue
+        if pd.isna(e['start_time_obj']) or pd.isna(e['end_time_obj']):
+            continue
         events.append({
-            "start_min": to_minutes(e['start_time_obj']), "end_min": to_minutes(e['end_time_obj']),
-            "subject": e["subject"], "instructor": e["instructor"], "room": e["room"], "group": e["group"],
-            "start_str": e["start_time"], "end_str": e["end_time"]
+            "start_min": to_minutes(e['start_time_obj']),
+            "end_min": to_minutes(e['end_time_obj']),
+            "subject": e["subject"],
+            "instructor": e["instructor"],
+            "room": e["room"],
+            "group": e["group"],
+            "start_str": e["start_time"],
+            "end_str": e["end_time"]
         })
     events.sort(key=lambda x: (x["start_min"], x["end_min"]))
-    
-    result = []
-    active = []
-    free_cols = []
-    next_col = 0
-    clusters, current_cluster = [], []
-    for idx, ev in enumerate(events):
-        while active and active[0][0] <= ev["start_min"]:
-            _, col_finished, _ = heapq.heappop(active)
-            free_cols.append(col_finished); free_cols.sort()
-        if not active and current_cluster:
-            clusters.append(current_cluster); current_cluster = []
-        col = free_cols.pop(0) if free_cols else next_col
-        if col == next_col: next_col += 1
-        heapq.heappush(active, (ev["end_min"], col, idx))
-        result.append({**ev, "col": col, "cluster_id": -1})
-        current_cluster.append((idx, ev["start_min"], ev["end_min"], col))
-    if current_cluster: clusters.append(current_cluster)
-    cluster_cols = {}
-    for c_id, items in enumerate(clusters):
-        points = []
-        for _, s, e, _ in items:
-            points.append((s, 1)); points.append((e, -1))
-        points.sort(key=lambda x: (x[0], -x[1]))
-        cur = peak = 0
-        for _, d in points:
-            cur += d; peak = max(peak, cur)
-        cluster_cols[c_id] = max(1, peak)
-        for idx, *_ in items:
-            result[idx]["cluster_id"] = c_id
-    positioned = result
 
+    # Kolumny + klastry (równoległe obok siebie)
+    def assign_columns_and_clusters_local(evts):
+        result = []
+        active = []
+        free_cols = []
+        next_col = 0
+        clusters, current_cluster = [], []
+        for idx, ev in enumerate(evts):
+            while active and active[0][0] <= ev["start_min"]:
+                _, col_finished, _ = heapq.heappop(active)
+                free_cols.append(col_finished); free_cols.sort()
+            if not active and current_cluster:
+                clusters.append(current_cluster); current_cluster = []
+            col = free_cols.pop(0) if free_cols else next_col
+            if col == next_col: next_col += 1
+            heapq.heappush(active, (ev["end_min"], col, idx))
+            result.append({**ev, "col": col, "cluster_id": -1})
+            current_cluster.append((idx, ev["start_min"], ev["end_min"], col))
+        if current_cluster: clusters.append(current_cluster)
+        cluster_cols = {}
+        for c_id, items in enumerate(clusters):
+            points = []
+            for _, s, e, _ in items:
+                points.append((s, 1)); points.append((e, -1))
+            points.sort(key=lambda x: (x[0], -x[1]))
+            cur = peak = 0
+            for _, d in points:
+                cur += d; peak = max(peak, cur)
+            cluster_cols[c_id] = max(1, peak)
+            for idx, *_ in items:
+                result[idx]["cluster_id"] = c_id
+        return result, cluster_cols
+
+    positioned, cluster_cols = assign_columns_and_clusters_local(events)
+
+    # Render eventów (mniejsza min-wys)
     events_html_parts = []
     for ev in positioned:
         total_cols = max(1, cluster_cols.get(ev["cluster_id"], 1))
         width_pct = 100 / total_cols
         left_pct = ev["col"] * width_pct
         top = (ev["start_min"] - start_m) * PX_PER_MIN
-        height = max(34, (ev["end_min"] - ev["start_min"]) * PX_PER_MIN)
-        
-        subject = html.escape(str(ev.get('subject', '')))
-        instructor = html.escape(str(ev.get('instructor', '')))
-        room = html.escape(str(ev.get('room', '')))
-        group = html.escape(str(ev.get('group', '')))
-        
+        height = max(34, (ev["end_min"] - ev["start_min"]) * PX_PER_MIN)  # 34px min
         part = (
             f"<div class='event' style='top:{top:.2f}px;height:{height:.2f}px;"
             f"left:calc({left_pct}% + 2px);width:calc({width_pct}% - 6px);'>"
-            f"<div class='title'>{subject}</div>"
-            f"<div class='meta'>{ev['start_str']}–{ev['end_str']} • Sala {room} • Gr {group}<br>{instructor}</div>"
+            f"<div class='title'>{ev['subject']}</div>"
+            f"<div class='meta'>{ev['start_str']}–{ev['end_str']} • Sala {ev['room']} • Gr {ev['group']}<br>{ev['instructor']}</div>"
             f"</div>"
         )
         events_html_parts.append(part)
     events_html = "".join(events_html_parts)
 
+    # Linia TERAZ
     now_wide_html = ""
     if selected_day_date == today:
         now_dt_line = datetime.now(timezone.utc).astimezone(TZ_WA)
@@ -241,6 +331,7 @@ try:
             f"<div class='now-badge' style='top:{top_now:.2f}px'>Teraz {now_dt_line.strftime('%H:%M')}</div>"
         )
 
+    # Layout
     day_layout_html = (
         f"<div class='day-layout' style='--day-height:{height_px:.2f}px'>"
         f"<div class='timeline-rail'><div class='timeline-rail-inner' style='height:{height_px:.2f}px'>{''.join(ticks_html)}</div></div>"
