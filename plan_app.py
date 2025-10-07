@@ -6,8 +6,8 @@ import heapq
 from zoneinfo import ZoneInfo
 
 # --- STAŁE DLA GĘSTOŚCI WIDOKU ---
-HOUR_HEIGHT_PX = 65         # 1h = 80px (było >100). Zmień na 70/60, jeśli chcesz jeszcze ciaśniej.
-COMPACT_RANGE = True        # przycinaj widok do zakresu zajęć (+/- 15 min)
+HOUR_HEIGHT_PX = 65        # 1h = 65px. Zmniejsz do 60/55, gdy chcesz jeszcze ciaśniej.
+COMPACT_RANGE   = True     # przycinaj widok do zakresu zajęć (+/- 15 min)
 TZ_WA = ZoneInfo("Europe/Warsaw")
 
 # --- USTAWIENIA STRONY ---
@@ -50,57 +50,57 @@ def load_data(file_path: str) -> pd.DataFrame:
     df.sort_values(by=['date', 'start_time_obj'], inplace=True)
     return df
 
-# --- STYLE: globalnie mniejsze, gęstsze, mniejsze przyciski ---
+# --- STYLE: globalnie mniejsze, gęstsze, + jeszcze mniejsze przyciski dni ---
 st.markdown("""
 <style>
-  html { font-size: 14px; }                 /* globalnie mniejsza typografia */
-  body, .stApp { line-height: 1.25; }       /* ciaśniejsza interlinia */
+  html { font-size: 13.5px; }                 /* globalna typografia */
+  body, .stApp { line-height: 1.25; }
   .stApp > header { background-color: transparent; }
-  .main .block-container { padding: 0.5rem 0.6rem 3rem 0.6rem; }  /* mniej pionowych marginesów */
-  h1 { text-align:center; color:#1a202c; margin-bottom:0.6rem; font-size:1.35rem; }
-  .week-range { text-align:center; font-size:1.05rem; font-weight:600; color:#2d3748; margin:0.2rem 0 0.6rem; }
+  .main .block-container { padding: 0.45rem 0.55rem 3rem 0.55rem; }
+  h1 { text-align:center; color:#1a202c; margin-bottom:0.55rem; font-size:1.28rem; }
+  .week-range { text-align:center; font-size:1.0rem; font-weight:600; color:#2d3748; margin:0.15rem 0 0.5rem; }
 
-  /* Mniejsze przyciski globalnie (w tym dni tygodnia) */
+  /* Mniejsze przyciski globalnie */
   .stButton>button {
-    padding: 0.25rem 0.5rem !important;
-    font-size: 0.85rem !important;
-    line-height: 1.1 !important;
-    border-radius: 8px !important;
+    padding: 0.22rem 0.45rem !important;
+    font-size: 0.8rem !important;
+    line-height: 1.05 !important;
+    border-radius: 7px !important;
   }
 
   /* Layout dnia bardziej zwarty */
-  .day-layout { display:grid; grid-template-columns:70px 1fr; gap:0.6rem; align-items:start; }
+  .day-layout { display:grid; grid-template-columns:64px 1fr; gap:0.5rem; align-items:start; }
 
   /* Oś godzin – węższa i ciaśniejsza */
-  .timeline-rail { position:sticky; top:0; width:70px; border-right:2px solid #e2e8f0; }
+  .timeline-rail { position:sticky; top:0; width:64px; border-right:2px solid #e2e8f0; }
   .timeline-rail-inner { position:relative; height:var(--day-height, 720px); }
   .tick { position:absolute; left:0; right:0; border-top:1px dashed #e2e8f0; }
-  .tick-label { position:absolute; left:0; width:60px; text-align:right; font-size:0.72rem; color:#94a3b8; transform:translateY(-50%); padding-right:4px; }
+  .tick-label { position:absolute; left:0; width:54px; text-align:right; font-size:0.68rem; color:#94a3b8; transform:translateY(-50%); padding-right:4px; }
 
-  /* Płótno i eventy – mniej paddingu i minimalnej wysokości */
+  /* Płótno i eventy – mniej paddingu i min-wys */
   .calendar-canvas { position:relative; min-height:var(--day-height, 720px); border-left:2px solid #e2e8f0; }
   .event {
-    position:absolute; box-sizing:border-box; padding:6px 8px;
-    background:#0ea5e910; border:1px solid #38bdf8; border-radius:10px;
+    position:absolute; box-sizing:border-box; padding:5px 7px;
+    background:#0ea5e910; border:1px solid #38bdf8; border-radius:9px;
     overflow:hidden; box-shadow:0 1px 2px rgba(0,0,0,.05);
   }
-  .event .title { font-weight:700; color:#0f172a; margin-bottom:1px; font-size:0.92rem; }
-  .event .meta { font-size:.72rem; color:#334155; line-height:1.15; }
+  .event .title { font-weight:700; color:#0f172a; margin-bottom:1px; font-size:0.9rem; }
+  .event .meta { font-size:.68rem; color:#334155; line-height:1.12; }
 
   /* Linia TERAZ */
   .now-line-wide { position:absolute; left:0; right:0; border-top:2px solid #ef4444; z-index:3; }
-  .now-badge { position:absolute; right:6px; transform:translateY(-100%); font-size:.7rem; color:#ef4444; z-index:4; background:transparent; }
+  .now-badge { position:absolute; right:6px; transform:translateY(-100%); font-size:.66rem; color:#ef4444; z-index:4; background:transparent; }
 
   /* Jeszcze ciaśniej na małych ekranach */
   @media (max-width: 640px) {
-    html { font-size: 13px; }
-    .day-layout { grid-template-columns:56px 1fr; gap:0.45rem; }
-    .timeline-rail { width:56px; }
-    .tick-label { width:48px; font-size:.68rem; }
-    .event { padding:5px 7px; border-radius:8px; }
-    .event .title { font-size:.88rem; }
-    .event .meta { font-size:.68rem; }
-    .stButton>button { padding:0.22rem 0.45rem !important; font-size:.82rem !important; }
+    html { font-size: 12.8px; }
+    .day-layout { grid-template-columns:52px 1fr; gap:0.4rem; }
+    .timeline-rail { width:52px; }
+    .tick-label { width:46px; font-size:.64rem; }
+    .event { padding:4px 6px; border-radius:8px; }
+    .event .title { font-size:.86rem; }
+    .event .meta { font-size:.64rem; }
+    .stButton>button { padding:0.18rem 0.4rem !important; font-size:.78rem !important; }
   }
 </style>
 """, unsafe_allow_html=True)
@@ -162,12 +162,13 @@ try:
     now_dt = datetime.now(timezone.utc).astimezone(TZ_WA)
     today = now_dt.date()
 
+    # Stan sesji (używamy offsetu dnia tygodnia 0..6, ale pokażemy tylko 0..4)
     if 'current_week_start' not in st.session_state:
         st.session_state.current_week_start = today - timedelta(days=today.weekday())
-    if 'selected_day_index' not in st.session_state:
-        st.session_state.selected_day_index = today.weekday()
+    if 'selected_day_offset' not in st.session_state:
+        st.session_state.selected_day_offset = min(today.weekday(), 4)  # jeśli sob/ndz → ustaw Pon-Pt
 
-    # Nawigacja tygodnia (mniejsze guziki już załatwia CSS powyżej)
+    # Nawigacja tygodnia
     week_start = st.session_state.current_week_start
     week_end = week_start + timedelta(days=6)
 
@@ -177,7 +178,7 @@ try:
         st.rerun()
     if nav_cols[1].button("📍 Dziś", use_container_width=True):
         st.session_state.current_week_start = today - timedelta(days=today.weekday())
-        st.session_state.selected_day_index = today.weekday()
+        st.session_state.selected_day_offset = min(today.weekday(), 4)
         st.rerun()
     nav_cols[2].markdown(f"<div class='week-range'>{week_start.strftime('%d.%m')} – {week_end.strftime('%d.%m.%Y')}</div>", unsafe_allow_html=True)
     if nav_cols[3].button("Następny ➡️", use_container_width=True):
@@ -187,17 +188,18 @@ try:
     # Skala pionowa (bez suwaka)
     PX_PER_MIN = HOUR_HEIGHT_PX / 60.0
 
-    # Zakładki dni (też mniejsze przez globalny CSS)
+    # Zakładki dni (TYLKO Pon–Pt)
     days_of_week_pl = ["Pon", "Wt", "Śr", "Czw", "Pt", "Sob", "Niedz"]
-    day_tabs = st.columns(7)
-    for i in range(7):
-        current_day_date = week_start + timedelta(days=i)
-        if day_tabs[i].button(f"{days_of_week_pl[i]} {current_day_date.day}", use_container_width=True):
-            st.session_state.selected_day_index = i
+    visible_offsets = [0, 1, 2, 3, 4]  # bez sob/ndz
+    day_tabs = st.columns(len(visible_offsets))
+    for i, off in enumerate(visible_offsets):
+        current_day_date = week_start + timedelta(days=off)
+        if day_tabs[i].button(f"{days_of_week_pl[off]} {current_day_date.day}", use_container_width=True):
+            st.session_state.selected_day_offset = off
             st.rerun()
 
-    # Dane dnia
-    selected_day_date = week_start + timedelta(days=st.session_state.selected_day_index)
+    # Dane dnia (używamy wybranego offsetu z zakresu 0..4)
+    selected_day_date = week_start + timedelta(days=st.session_state.selected_day_offset)
     day_events = df[df['date'].dt.date == selected_day_date]
     st.markdown(f"### {selected_day_date.strftime('%A, %d.%m.%Y')}")
 
@@ -290,7 +292,7 @@ try:
         width_pct = 100 / total_cols
         left_pct = ev["col"] * width_pct
         top = (ev["start_min"] - start_m) * PX_PER_MIN
-        height = max(36, (ev["end_min"] - ev["start_min"]) * PX_PER_MIN)  # 36px min
+        height = max(34, (ev["end_min"] - ev["start_min"]) * PX_PER_MIN)  # 34px min
         part = (
             f"<div class='event' style='top:{top:.2f}px;height:{height:.2f}px;"
             f"left:calc({left_pct}% + 2px);width:calc({width_pct}% - 6px);'>"
@@ -325,5 +327,3 @@ except FileNotFoundError:
     st.error("Nie znaleziono pliku `plan_zajec.xlsx`. Upewnij się, że plik znajduje się w repozytorium.")
 except Exception as e:
     st.error(f"Wystąpił nieoczekiwany błąd: {e}")
-
-
