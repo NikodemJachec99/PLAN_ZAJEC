@@ -5,7 +5,7 @@ import math
 import heapq
 
 # --- USTAWIENIA STRONY ---
-st.set_page_config(page_title="Interaktywny Plan Zajęć", page_icon="📅", layout="centered")
+st.set_page_config(page_title="Interaktywny Plan Zajęć ❤️", page_icon="📅", layout="centered")
 
 # --- AUTO-ODŚWIEŻANIE (60 s) ---
 try:
@@ -256,3 +256,5 @@ except FileNotFoundError:
     st.error("Nie znaleziono pliku `plan_zajec.xlsx`. Upewnij się, że plik znajduje się w repozytorium.")
 except Exception as e:
     st.error(f"Wystąpił nieoczekiwany błąd: {e}")
+st.markdown("---")
+st.write("Made with ❤️ for you!")
