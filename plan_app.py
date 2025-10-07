@@ -41,8 +41,6 @@ def load_data(file_path: str) -> pd.DataFrame:
     df['instructor'] = (
         df['degree'].fillna('') + ' ' + df['first_name'].fillna('') + ' ' + df['last_name'].fillna('')
     ).str.strip()
-    
-    # --- POPRAWKA: Upewniamy się, że kolumna 'group' jest zawsze tekstem ---
     df['group'] = df['group'].fillna('---').astype(str)
 
     df['start_time_obj'] = pd.to_datetime(df['start_time'], format='%H:%M:%S', errors='coerce').dt.time
@@ -139,8 +137,10 @@ try:
     selected_day_date = week_start + timedelta(days=st.session_state.selected_day_offset)
     day_events = df[df['date'].dt.date == selected_day_date]
 
+    # --- POPRAWKA: Logika filtrowania uwzględnia teraz grupę "cały rok" ---
     if filter_magdalenka:
-        day_events = day_events[day_events['group'].isin(['11', 'D'])]
+        magdalenka_groups = ['1', 'd', 'cały rok']
+        day_events = day_events[day_events['group'].isin(magdalenka_groups)]
 
     st.markdown(f"### {selected_day_date.strftime('%A, %d.%m.%Y')}")
 
@@ -176,7 +176,6 @@ try:
         })
     events.sort(key=lambda x: (x["start_min"], x["end_min"]))
     
-    # Ten fragment jest skopiowany z Twojej wersji i pozostawiony bez zmian
     result = []
     active = []
     free_cols = []
@@ -216,7 +215,6 @@ try:
         top = (ev["start_min"] - start_m) * PX_PER_MIN
         height = max(34, (ev["end_min"] - ev["start_min"]) * PX_PER_MIN)
         
-        # --- POPRAWKA: Zabezpieczamy dane za pomocą html.escape() i str() ---
         subject = html.escape(str(ev.get('subject', '')))
         instructor = html.escape(str(ev.get('instructor', '')))
         room = html.escape(str(ev.get('room', '')))
@@ -254,4 +252,3 @@ except FileNotFoundError:
     st.error("Nie znaleziono pliku `plan_zajec.xlsx`. Upewnij się, że plik znajduje się w repozytorium.")
 except Exception as e:
     st.error(f"Wystąpił nieoczekiwany błąd: {e}")
-
