@@ -1,10 +1,9 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
-import time
 
 # --- Konfiguracja strony ---
-st.set_page_config(page_title="Interaktywny Plan Zajęć", page_icon="📅", layout="wide")
+st.set_page_config(page_title="Interaktywny Plan Zajęć", page_icon="📅", layout="centered")
 
 # --- Wczytywanie i przetwarzanie danych ---
 @st.cache_data(ttl=600) # Odśwież dane co 10 minut
@@ -12,7 +11,6 @@ def load_data(file_path):
     """Wczytuje i przetwarza dane z pliku Excel."""
     df = pd.read_excel(file_path, header=3)
     
-    # Czyszczenie i formatowanie
     df.columns = [
         'date', 'day_of_week', 'start_time', 'end_time', 'subject', 'type',
         'degree', 'first_name', 'last_name', 'room', 'field_year', 'group',
@@ -27,97 +25,124 @@ def load_data(file_path):
     df_cleaned['instructor'] = (df_cleaned['degree'].fillna('') + ' ' + df_cleaned['first_name'].fillna('') + ' ' + df_cleaned['last_name'].fillna('')).str.strip()
     df_cleaned['group'] = df_cleaned['group'].fillna('---').astype(str)
     
-    # Konwersja czasu na obiekty time dla łatwiejszych obliczeń
     df_cleaned['start_time_obj'] = pd.to_datetime(df_cleaned['start_time'], format='%H:%M:%S', errors='coerce').dt.time
-    df_cleaned['end_time_obj'] = pd.to_datetime(df_cleaned['end_time'], format='%H:%M:%S', errors='coerce').dt.time
-    
-    # Formatowanie czasu do wyświetlania
     df_cleaned['start_time'] = df_cleaned['start_time_obj'].apply(lambda x: x.strftime('%H:%M') if pd.notnull(x) else 'Błąd')
-    df_cleaned['end_time'] = df_cleaned['end_time_obj'].apply(lambda x: x.strftime('%H:%M') if pd.notnull(x) else 'Błąd')
+    df_cleaned['end_time'] = pd.to_datetime(df_cleaned['end_time'], format='%H:%M:%S', errors='coerce').dt.time.apply(lambda x: x.strftime('%H:%M') if pd.notnull(x) else 'Błąd')
 
     df_cleaned.sort_values(by=['date', 'start_time_obj'], inplace=True)
     return df_cleaned
 
-# --- Style CSS ---
+# --- Style CSS dla nowego, responsywnego wyglądu ---
 st.markdown("""
 <style>
-    /* Nawigacja */
+    /* Ukrycie domyślnego nagłówka Streamlit */
+    .stApp > header {
+        background-color: transparent;
+    }
+    /* Główny kontener */
+    .main .block-container {
+        padding: 1rem 1rem 5rem 1rem;
+    }
+    /* Tytuł aplikacji */
+    h1 {
+        text-align: center;
+        color: #1a202c;
+        margin-bottom: 0;
+    }
+    /* Podtytuł */
+    .subtitle {
+        text-align: center;
+        color: #718096;
+        margin-bottom: 2rem;
+    }
+    /* Kontener nawigacji */
     .nav-container {
         display: flex;
         justify-content: space-between;
         align-items: center;
-        background-color: #f8f9fa;
-        padding: 10px 20px;
-        border-radius: 12px;
+        background-color: #ffffff;
+        padding: 0.5rem 1rem;
+        border-radius: 0.75rem;
+        border: 1px solid #e2e8f0;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.03);
         margin-bottom: 2rem;
-        border: 1px solid #dee2e6;
     }
     .nav-container h2 {
         margin: 0;
-        font-size: 1.75rem;
-        color: #2c3e50;
-    }
-    .week-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
-        gap: 1.5rem;
+        font-size: 1.25rem;
+        color: #2d3748;
+        font-weight: 600;
     }
     /* Karta dnia */
-    .day-card {
-        background-color: #ffffff;
-        border-radius: 12px;
-        padding: 1.5rem;
-        border: 1px solid #dee2e6;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.05);
-        min-height: 400px;
-        position: relative; /* Potrzebne dla linii czasu */
-    }
-    .day-card.today {
-        border: 2px solid #007bff;
-        box-shadow: 0 8px 24px rgba(0,123,255,0.1);
+    .day-container {
+        margin-bottom: 2rem;
     }
     .day-header {
-        margin-bottom: 1.5rem;
+        display: flex;
+        align-items: baseline;
+        gap: 0.75rem;
+        margin-bottom: 1rem;
         padding-bottom: 0.5rem;
-        border-bottom: 1px solid #f1f3f5;
+        border-bottom: 1px solid #e2e8f0;
+    }
+    .day-header.today h3, .day-header.today .date-span {
+        color: #2563eb;
     }
     .day-header h3 {
         margin: 0;
-        color: #2c3e50;
-        font-size: 1.25rem;
+        font-size: 1.5rem;
+        color: #2d3748;
     }
-    .day-header span {
-        color: #6c757d;
-        font-size: 0.9rem;
+    .day-header .date-span {
+        color: #718096;
+        font-size: 1rem;
     }
     /* Karta zajęć */
     .class-card {
-        border-left: 4px solid #007bff;
-        padding: 0.8rem 1rem;
-        margin-bottom: 1rem;
-        background-color: #f8f9fa;
-        border-radius: 6px;
+        display: flex;
+        gap: 1rem;
+        padding: 1rem 0;
+        border-bottom: 1px solid #f1f3f5;
     }
-    .class-time { font-weight: 600; color: #343a40; }
-    .class-subject { font-weight: 500; font-size: 1.05em; margin: 5px 0; }
-    .class-details { font-size: 0.85em; color: #6c757d; }
+    .class-time {
+        font-weight: 600;
+        color: #1a202c;
+        font-size: 0.9rem;
+        width: 100px; /* Stała szerokość dla wyrównania */
+    }
+    .class-content {
+        flex-grow: 1;
+    }
+    .class-subject {
+        font-weight: 600;
+        font-size: 1.05em;
+        margin-bottom: 0.25rem;
+        color: #2d3748;
+    }
+    .class-details {
+        font-size: 0.9em;
+        color: #718096;
+    }
     /* Linia czasu */
+    .timeline-container {
+        position: relative;
+    }
     .timeline {
         position: absolute;
-        left: 0;
-        right: 0;
+        left: -1rem; /* Wyjście poza padding karty */
+        right: -1rem;
         height: 2px;
-        background-color: red;
+        background-color: #ef4444;
         z-index: 10;
     }
     .timeline::before {
         content: '';
         position: absolute;
-        left: -5px;
+        left: 1rem; /* Wyrównanie z treścią */
         top: -4px;
         width: 10px;
         height: 10px;
-        background-color: red;
+        background-color: #ef4444;
         border-radius: 50%;
     }
 </style>
@@ -125,39 +150,34 @@ st.markdown("""
 
 # --- Logika aplikacji ---
 try:
-    df = load_data("PI_s_II_26_09_2025 (1).xlsx")
+    df = load_data("plan_zajec.xlsx")
 
-    # Inicjalizacja stanu sesji
+    st.title("Plan Zajęć")
+    st.markdown("<p class='subtitle'>Interaktywny harmonogram na cały semestr</p>", unsafe_allow_html=True)
+    
     if 'current_week_start' not in st.session_state:
         today = datetime.now().date()
-        # Początek tygodnia to poniedziałek
         st.session_state.current_week_start = today - timedelta(days=today.weekday())
 
     # --- Nawigacja ---
-    nav_cols = st.columns([1, 4, 1, 1])
-    with nav_cols[0]:
-        if st.button("⬅️ Poprzedni", use_container_width=True):
-            st.session_state.current_week_start -= timedelta(days=7)
-    with nav_cols[2]:
-        if st.button("Następny ➡️", use_container_width=True):
-            st.session_state.current_week_start += timedelta(days=7)
-    with nav_cols[3]:
-        if st.button("🗓️ Dzisiaj", use_container_width=True):
-            today = datetime.now().date()
-            st.session_state.current_week_start = today - timedelta(days=today.weekday())
-    
-    # Wyświetlanie daty
     week_start = st.session_state.current_week_start
     week_end = week_start + timedelta(days=6)
+    
+    nav_cols = st.columns([1, 4, 1])
+    with nav_cols[0]:
+        if st.button("⬅️", use_container_width=True):
+            st.session_state.current_week_start -= timedelta(days=7)
+            st.rerun() # Natychmiastowe odświeżenie
+    with nav_cols[2]:
+        if st.button("➡️", use_container_width=True):
+            st.session_state.current_week_start += timedelta(days=7)
+            st.rerun()
     with nav_cols[1]:
-        st.markdown(f"<div class='nav-container'><h2>{week_start.strftime('%d.%m.%Y')} - {week_end.strftime('%d.%m.%Y')}</h2></div>", unsafe_allow_html=True)
-
+        st.markdown(f"<div class='nav-container'><h2>{week_start.strftime('%d.%m')} - {week_end.strftime('%d.%m.%Y')}</h2></div>", unsafe_allow_html=True)
 
     # --- Wyświetlanie tygodnia ---
-    st.markdown('<div class="week-grid">', unsafe_allow_html=True)
-    
     today_date = datetime.now().date()
-    current_time = datetime.now().time()
+    current_time_obj = datetime.now().time()
     
     days_of_week_pl = ["Poniedziałek", "Wtorek", "Środa", "Czwartek", "Piątek", "Sobota", "Niedziela"]
 
@@ -167,52 +187,52 @@ try:
         
         is_today_class = "today" if current_day == today_date else ""
         
-        with st.container():
-            st.markdown(f'<div class="day-card {is_today_class}">', unsafe_allow_html=True)
-            
-            # Nagłówek dnia
-            st.markdown(f"""
-            <div class="day-header">
+        st.markdown(f'<div class="day-container">', unsafe_allow_html=True)
+        st.markdown(f"""
+            <div class="day-header {is_today_class}">
                 <h3>{days_of_week_pl[i]}</h3>
-                <span>{current_day.strftime('%d.%m.%Y')}</span>
+                <span class="date-span">{current_day.strftime('%d.%m')}</span>
             </div>
-            """, unsafe_allow_html=True)
-
-            # Linia czasu (jeśli to dzisiejszy dzień)
+        """, unsafe_allow_html=True)
+        
+        container = st.container()
+        
+        if not day_events.empty:
+            container.markdown('<div class="timeline-container">', unsafe_allow_html=True) # Kontener dla linii czasu
+            
+            # Linia czasu
             if current_day == today_date:
-                # Oblicz pozycję procentową linii czasu (zakładamy dzień od 8:00 do 20:00)
-                day_start_hour = 8
-                day_end_hour = 20
-                total_minutes_in_day = (day_end_hour - day_start_hour) * 60
-                minutes_from_start = (current_time.hour - day_start_hour) * 60 + current_time.minute
-                
-                if 0 <= minutes_from_start <= total_minutes_in_day:
-                    top_percentage = (minutes_from_start / total_minutes_in_day) * 100
-                    st.markdown(f'<div class="timeline" style="top: {top_percentage}%;"></div>', unsafe_allow_html=True)
+                day_start_hour, day_end_hour = 8, 20
+                total_seconds = (day_end_hour - day_start_hour) * 3600
+                current_seconds = (current_time_obj.hour - day_start_hour) * 3600 + current_time_obj.minute * 60 + current_time_obj.second
+                if 0 <= current_seconds <= total_seconds:
+                    top_percentage = (current_seconds / total_seconds) * 100
+                    # Używamy pustego kontenera jako "płótna" dla linii
+                    placeholder = container.empty()
+                    placeholder.markdown(f'<div class="timeline" style="top: {top_percentage}%;"></div>', unsafe_allow_html=True)
 
-            # Wyświetlanie zajęć
-            if not day_events.empty:
-                for _, event in day_events.iterrows():
-                    st.markdown(f"""
-                    <div class="class-card">
-                        <div class="class-time">{event['start_time']} - {event['end_time']}</div>
+            # Zajęcia
+            for _, event in day_events.iterrows():
+                container.markdown(f"""
+                <div class="class-card">
+                    <div class="class-time">{event['start_time']}</div>
+                    <div class="class-content">
                         <div class="class-subject">{event['subject']}</div>
                         <div class="class-details">
-                            <span>{event['instructor']}</span> | 
-                            <span>{event['room']}</span> | 
-                            <span>{event['group']}</span>
+                            <span>{event['instructor']}</span> &bull; 
+                            <span>Sala: {event['room']}</span> &bull; 
+                            <span>Gr: {event['group']}</span>
                         </div>
                     </div>
-                    """, unsafe_allow_html=True)
-            else:
-                st.markdown("<p style='color: #adb5bd; text-align: center; margin-top: 2rem;'>Brak zajęć</p>", unsafe_allow_html=True)
-            
-            st.markdown('</div>', unsafe_allow_html=True)
-    
-    st.markdown('</div>', unsafe_allow_html=True)
-    
+                </div>
+                """, unsafe_allow_html=True)
+            container.markdown('</div>', unsafe_allow_html=True)
+        else:
+            container.markdown("<p style='color: #adb5bd; padding: 2rem 0;'>Brak zajęć</p>", unsafe_allow_html=True)
+
+        st.markdown('</div>', unsafe_allow_html=True)
+        
 except FileNotFoundError:
     st.error("Nie znaleziono pliku `plan_zajec.xlsx`. Upewnij się, że plik znajduje się w repozytorium na GitHubie.")
 except Exception as e:
     st.error(f"Wystąpił nieoczekiwany błąd: {e}")
-
