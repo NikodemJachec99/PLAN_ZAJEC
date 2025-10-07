@@ -130,7 +130,8 @@ try:
     df = load_data("plan_zajec.xlsx")
     st.title("Plan Zajęć ❤️")
 
-    now_dt = datetime.now(ZoneInfo("Europe/Warsaw"))
+    tz = pytz.timezone("Europe/Warsaw")
+    now_dt = datetime.now(timezone.utc).astimezone(tz)
     today = now_dt.date()
 
     if 'current_week_start' not in st.session_state:
@@ -263,6 +264,7 @@ except Exception as e:
     st.error(f"Wystąpił nieoczekiwany błąd: {e}")
 st.markdown("---")
 st.write("Made with ❤️ for you!")
+
 
 
 
