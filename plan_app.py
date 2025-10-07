@@ -209,7 +209,7 @@ try:
                 return True
             # jeśli wygląda na numeryczny schemat (zawiera cyfry) → bierzemy tylko '1' (np. '1', '1a' też przejdzie)
             if any(ch.isdigit() for ch in s):
-                return s == "1" or s.startswith("1")
+                return s == "11" or s.startswith("1")
             # w przeciwnym razie traktujemy jako literowy → bierzemy tylko 'd'
             return s == "d" or s.startswith("d")
 
@@ -344,3 +344,4 @@ except FileNotFoundError:
     st.error("Nie znaleziono pliku `plan_zajec.xlsx`. Upewnij się, że plik znajduje się w repozytorium.")
 except Exception as e:
     st.error(f"Wystąpił nieoczekiwany błąd: {e}")
+
