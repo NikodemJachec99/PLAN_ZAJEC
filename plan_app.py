@@ -6,7 +6,7 @@ import heapq
 from zoneinfo import ZoneInfo
 
 # --- STAŁE DLA GĘSTOŚCI WIDOKU ---
-HOUR_HEIGHT_PX = 80         # 1h = 80px (było >100). Zmień na 70/60, jeśli chcesz jeszcze ciaśniej.
+HOUR_HEIGHT_PX = 40         # 1h = 80px (było >100). Zmień na 70/60, jeśli chcesz jeszcze ciaśniej.
 COMPACT_RANGE = True        # przycinaj widok do zakresu zajęć (+/- 15 min)
 TZ_WA = ZoneInfo("Europe/Warsaw")
 
@@ -325,3 +325,4 @@ except FileNotFoundError:
     st.error("Nie znaleziono pliku `plan_zajec.xlsx`. Upewnij się, że plik znajduje się w repozytorium.")
 except Exception as e:
     st.error(f"Wystąpił nieoczekiwany błąd: {e}")
+
