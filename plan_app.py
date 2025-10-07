@@ -48,19 +48,22 @@ def load_data(file_path: str) -> pd.DataFrame:
     df.sort_values(by=['date', 'start_time_obj'], inplace=True)
     return df
 
-# --- STYLE (desktop + mobile + zoom wrapper) ---
+# --- STYLE (globalny zoom + mobile) ---
 st.markdown("""
 <style>
+  :root { --ui-scale: 1; } /* nadpisujemy dynamicznie z Pythona */
+
+  /* GLOBALNY ZOOM CAŁEJ APLIKACJI */
+  .stApp {
+    transform: scale(var(--ui-scale));
+    transform-origin: top left;
+    width: calc(100% / var(--ui-scale));
+  }
+
   .stApp > header { background-color: transparent; }
   .main .block-container { padding: 0.75rem 0.75rem 4rem 0.75rem; }
   h1 { text-align:center; color:#1a202c; margin-bottom:1.0rem; }
   .week-range { text-align:center; font-size:1.25rem; font-weight:600; color:#2d3748; margin:0.25rem 0 0.75rem; }
-
-  /* Zoom wrapper: skaluje całość i kompensuje szerokość by nie było poziomego scrola */
-  .zoom-wrap {
-    transform-origin: top left;
-    /* transform ustawiamy inline w Pythonie: scale(var) */
-  }
 
   .day-layout { display:grid; grid-template-columns:88px 1fr; gap:1rem; align-items:start; }
 
@@ -102,7 +105,7 @@ def assign_columns_and_clusters(evts):
     """Nadaje kolumny i identyfikuje klastry (ciągi nakładających się eventów)."""
     result = []
     active = []        # min-heap po end_min: (end_min, col, idx)
-    free_cols = []     # lista wolnych kolumn (małe numery preferowane)
+    free_cols = []     # lista wolnych kolumn
     next_col = 0
     clusters, current_cluster = [], []
 
@@ -185,9 +188,12 @@ try:
         if 'ui_scale' not in st.session_state:
             st.session_state.ui_scale = 100
         st.session_state.ui_scale = st.slider("Skala widoku (%)", 60, 120, st.session_state.ui_scale, step=5,
-                                              help="Zmniejsz, aby zmieścić więcej na ekranie")
+                                              help="Globalny zoom całej aplikacji")
     PX_PER_MIN = st.session_state.hour_height / 60.0
     scale = max(0.6, min(1.2, st.session_state.ui_scale / 100.0))
+
+    # 🔧 Ustawiamy globalny zoom przez CSS var
+    st.markdown(f"<style>:root{{--ui-scale:{scale};}}</style>", unsafe_allow_html=True)
 
     # Zakładki dni
     days_of_week_pl = ["Pon", "Wt", "Śr", "Czw", "Pt", "Sob", "Niedz"]
@@ -207,10 +213,9 @@ try:
     base_start, base_end = dtime(7, 0), dtime(21, 0)
     base_start_m, base_end_m = to_minutes(base_start), to_minutes(base_end)
 
-    # Zakres czasu (kompaktowy wg zajęć, z marginesem)
-    if not day_events.empty and compact_range:
-        ev_start_m = min(day_events['start_time_obj'].dropna().map(to_minutes))
-        ev_end_m   = max(day_events['end_time_obj'].dropna().map(to_minutes))
+    if not day_events.empty and st.session_state.get("compact_range", True) or compact_range:
+        ev_start_m = min(day_events['start_time_obj'].dropna().map(to_minutes)) if not day_events.empty else base_start_m
+        ev_end_m   = max(day_events['end_time_obj'].dropna().map(to_minutes)) if not day_events.empty else base_end_m
         start_m = max(base_start_m, int(math.floor((ev_start_m - 15) / 60) * 60))
         end_m   = min(base_end_m,  int(math.ceil((ev_end_m + 15) / 60) * 60))
     else:
@@ -225,7 +230,7 @@ try:
     duration = max(60, end_m - start_m)
     height_px = duration * PX_PER_MIN
 
-    # Godzinowe ticki (lewa szyna)
+    # Godzinowe ticki
     first_tick_h = math.ceil(start_m / 60)
     last_tick_h  = math.floor(end_m / 60)
     ticks_html = []
@@ -234,7 +239,7 @@ try:
         ticks_html.append(f"<div class='tick' style='top:{top:.2f}px'></div>")
         ticks_html.append(f"<div class='tick-label' style='top:{top:.2f}px'>{h:02d}:00</div>")
 
-    # Eventy źródłowe
+    # Eventy
     events = []
     for _, e in day_events.iterrows():
         if pd.isna(e['start_time_obj']) or pd.isna(e['end_time_obj']):
@@ -251,10 +256,8 @@ try:
         })
     events.sort(key=lambda x: (x["start_min"], x["end_min"]))
 
-    # Kolumny + klastry (równoległe obok siebie)
     positioned, cluster_cols = assign_columns_and_clusters(events)
 
-    # Render eventów
     events_html_parts = []
     for ev in positioned:
         total_cols = max(1, cluster_cols.get(ev["cluster_id"], 1))
@@ -283,21 +286,14 @@ try:
             f"<div class='now-badge' style='top:{top_now:.2f}px'>Teraz {now_dt_line.strftime('%H:%M')}</div>"
         )
 
-    # Layout + ZOOM WRAP (kompensacja szerokości)
+    # Layout
     day_layout_html = (
         f"<div class='day-layout' style='--day-height:{height_px:.2f}px'>"
         f"<div class='timeline-rail'><div class='timeline-rail-inner' style='height:{height_px:.2f}px'>{''.join(ticks_html)}</div></div>"
         f"<div class='calendar-canvas' style='min-height:{height_px:.2f}px'>{now_wide_html}{events_html if events_html else '<div style=\"padding:12px;color:#64748b;\">Brak zajęć</div>'}</div>"
         f"</div>"
     )
-
-    # Opakowanie w zoom: transform:scale(S) i width: calc(100% / S) => brak poziomego scrolla
-    zoom_wrapper = (
-        f"<div class='zoom-wrap' style='transform:scale({scale});width:calc(100% / {scale});'>"
-        f"{day_layout_html}"
-        f"</div>"
-    )
-    st.markdown(zoom_wrapper, unsafe_allow_html=True)
+    st.markdown(day_layout_html, unsafe_allow_html=True)
 
 except FileNotFoundError:
     st.error("Nie znaleziono pliku `plan_zajec.xlsx`. Upewnij się, że plik znajduje się w repozytorium.")
