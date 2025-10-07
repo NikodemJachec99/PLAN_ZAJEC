@@ -48,13 +48,14 @@ def load_data(file_path: str) -> pd.DataFrame:
     df.sort_values(by=['date', 'start_time_obj'], inplace=True)
     return df
 
-# --- STYLE ---
+# --- STYLE (z responsywnym mobile) ---
 st.markdown("""
 <style>
   .stApp > header { background-color: transparent; }
-  .main .block-container { padding: 1rem 1rem 5rem 1rem; }
+  .main .block-container { padding: 0.75rem 0.75rem 4rem 0.75rem; }
   h1 { text-align:center; color:#1a202c; margin-bottom:1.0rem; }
   .week-range { text-align:center; font-size:1.25rem; font-weight:600; color:#2d3748; margin:0.25rem 0 0.75rem; }
+
   .day-layout { display:grid; grid-template-columns:88px 1fr; gap:1rem; align-items:start; }
 
   /* Oś godzin */
@@ -72,6 +73,19 @@ st.markdown("""
 
   .now-line-wide { position:absolute; left:0; right:0; border-top:2px solid #ef4444; z-index:3; }
   .now-badge { position:absolute; right:6px; transform:translateY(-100%); font-size:.75rem; color:#ef4444; z-index:4; background:transparent; }
+
+  /* --- MOBILE ≤ 640px --- */
+  @media (max-width: 640px) {
+    .week-range { font-size:1rem; }
+    .day-layout { grid-template-columns:52px 1fr; gap:0.5rem; }
+    .timeline-rail { width:52px; }
+    .tick-label { width:44px; font-size:.72rem; padding-right:4px; }
+    .event { padding:6px 8px; border-radius:10px; }
+    .event .title { font-size:.9rem; }
+    .event .meta { font-size:.72rem; }
+    /* przyciski mniejsze */
+    .stButton>button { padding:0.35rem 0.5rem !important; font-size:.9rem !important; }
+  }
 </style>
 """, unsafe_allow_html=True)
 
@@ -90,17 +104,14 @@ def assign_columns_and_clusters(evts):
     for idx, ev in enumerate(evts):
         while active and active[0][0] <= ev["start_min"]:
             _, col_finished, _ = heapq.heappop(active)
-            heapq.heappush(free_cols, col_finished)
-
+            free_cols.append(col_finished)
+            free_cols.sort()
         if not active and current_cluster:
             clusters.append(current_cluster)
             current_cluster = []
 
-        if free_cols:
-            col = heapq.heappop(free_cols)
-        else:
-            col = next_col
-            next_col += 1
+        col = free_cols.pop(0) if free_cols else next_col
+        if col == next_col: next_col += 1
 
         heapq.heappush(active, (ev["end_min"], col, idx))
         result.append({**ev, "col": col, "cluster_id": -1})
@@ -131,7 +142,7 @@ try:
     df = load_data("plan_zajec.xlsx")
     st.title("Plan Zajęć ❤️")
 
-    # Czas Warszawy: licz zawsze od UTC i konwertuj
+    # Czas Warszawy
     now_dt = datetime.now(timezone.utc).astimezone(TZ_WA)
     today = now_dt.date()
 
@@ -157,10 +168,15 @@ try:
         st.session_state.current_week_start += timedelta(days=7)
         st.rerun()
 
-    # Skala wysokości 1 godziny
-    if 'hour_height' not in st.session_state:
-        st.session_state.hour_height = 120
-    st.session_state.hour_height = st.slider("Wysokość 1h (px)", 60, 220, st.session_state.hour_height, step=10, help="Zwiększ, jeśli treść zajęć się nie mieści")
+    # ⚙️ Ustawienia widoku
+    colA, colB = st.columns([1,1])
+    with colA:
+        if 'hour_height' not in st.session_state:
+            st.session_state.hour_height = 110  # odrobinę bardziej kompaktowo
+        st.session_state.hour_height = st.slider("Wysokość 1h (px)", 60, 220, st.session_state.hour_height, step=10)
+    with colB:
+        compact_range = st.checkbox("Kompaktowy zakres (wg zajęć)", True, help="Przytnij widok do godzin, w których są zajęcia (+/- 15 min)")
+
     PX_PER_MIN = st.session_state.hour_height / 60.0
 
     # Zakładki dni
@@ -180,15 +196,22 @@ try:
     # ---- OŚ CZASU + PŁÓTNO KALENDARZA ----
     base_start, base_end = dtime(7, 0), dtime(21, 0)
 
-    if not day_events.empty:
-        ev_min = day_events['start_time_obj'].dropna()
-        ev_max = day_events['end_time_obj'].dropna()
-        start_t = min([base_start] + ([ev_min.min()] if not ev_min.empty else []))
-        end_t   = max([base_end]   + ([ev_max.max()] if not ev_max.empty else []))
+    # Wyznacz zakres czasu (mobilnie: wg zajęć)
+    base_start_m = to_minutes(base_start)
+    base_end_m   = to_minutes(base_end)
+    if not day_events.empty and compact_range:
+        ev_start_m = min(day_events['start_time_obj'].dropna().map(to_minutes))
+        ev_end_m   = max(day_events['end_time_obj'].dropna().map(to_minutes))
+        # margines +/- 15 min, zaokrąglenia do pełnej godziny
+        start_m = max(base_start_m, int(math.floor((ev_start_m - 15) / 60) * 60))
+        end_m   = min(base_end_m,  int(math.ceil((ev_end_m + 15) / 60) * 60))
     else:
-        start_t, end_t = base_start, base_end
+        # dotychczasowa logika
+        ev_min = day_events['start_time_obj'].dropna() if not day_events.empty else []
+        ev_max = day_events['end_time_obj'].dropna() if not day_events.empty else []
+        start_m = min([base_start_m] + ([min(map(to_minutes, ev_min))] if len(ev_min) else [])) if not day_events.empty else base_start_m
+        end_m   = max([base_end_m]   + ([max(map(to_minutes, ev_max))] if len(ev_max) else [])) if not day_events.empty else base_end_m
 
-    start_m, end_m = to_minutes(start_t), to_minutes(end_t)
     duration = max(60, end_m - start_m)
     height_px = duration * PX_PER_MIN
 
@@ -239,7 +262,7 @@ try:
         events_html_parts.append(part)
     events_html = "".join(events_html_parts)
 
-    # Linia TERAZ (czas Warszawy, poprawne wcięcie)
+    # Linia TERAZ
     now_wide_html = ""
     if selected_day_date == today:
         now_dt_line = datetime.now(timezone.utc).astimezone(TZ_WA)
