@@ -127,7 +127,9 @@ try:
     df = load_data("plan_zajec.xlsx")
     st.title("Plan Zajęć ❤️")
 
-    today = datetime.now().date()
+    warsaw_tz = pytz.timezone('Europe/Warsaw')
+    now_dt = datetime.now(warsaw_tz)
+    today = now_dt.date()
     if 'current_week_start' not in st.session_state:
         st.session_state.current_week_start = today - timedelta(days=today.weekday())
     if 'selected_day_index' not in st.session_state:
@@ -258,4 +260,5 @@ except Exception as e:
     st.error(f"Wystąpił nieoczekiwany błąd: {e}")
 st.markdown("---")
 st.write("Made with ❤️ for you!")
+
 
