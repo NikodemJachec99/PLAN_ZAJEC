@@ -240,14 +240,14 @@ try:
 
     # Linia TERAZ
     # Linia TERAZ (czas warszawski)
-now_wide_html = ""
-    if selected_day_date == today:
-    now_dt = datetime.now(timezone.utc).astimezone(tz)  # tz = pytz.timezone("Europe/Warsaw") wyżej
-    now_m = now_dt.hour * 60 + now_dt.minute
-    top_now = max(0, min(height_px, (now_m - start_m) * PX_PER_MIN))
-    now_wide_html = (
-        f"<div class='now-line-wide' style='top:{top_now:.2f}px'></div>"
-        f"<div class='now-badge' style='top:{top_now:.2f}px'>Teraz {now_dt.strftime('%H:%M')}</div>"
+    now_wide_html = ""
+        if selected_day_date == today:
+        now_dt = datetime.now(timezone.utc).astimezone(tz)  # tz = pytz.timezone("Europe/Warsaw") wyżej
+        now_m = now_dt.hour * 60 + now_dt.minute
+        top_now = max(0, min(height_px, (now_m - start_m) * PX_PER_MIN))
+        now_wide_html = (
+            f"<div class='now-line-wide' style='top:{top_now:.2f}px'></div>"
+            f"<div class='now-badge' style='top:{top_now:.2f}px'>Teraz {now_dt.strftime('%H:%M')}</div>"
     )
 
 
@@ -266,6 +266,7 @@ except Exception as e:
     st.error(f"Wystąpił nieoczekiwany błąd: {e}")
 st.markdown("---")
 st.write("Made with ❤️ for you!")
+
 
 
 
