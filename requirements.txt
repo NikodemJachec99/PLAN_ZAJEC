@@ -3,3 +3,4 @@ pandas
 openpyxl
 pytz
 streamlit-autorefresh
+tzdata
