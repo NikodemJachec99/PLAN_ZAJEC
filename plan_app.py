@@ -4,6 +4,8 @@ from datetime import datetime, timedelta, time as dtime
 import math
 import heapq
 import pytz
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 # --- USTAWIENIA STRONY ---
 st.set_page_config(page_title="Plan Zajęć ❤️", page_icon="📅", layout="centered")
@@ -128,9 +130,9 @@ try:
     df = load_data("plan_zajec.xlsx")
     st.title("Plan Zajęć ❤️")
 
-    warsaw_tz = pytz.timezone('Europe/Warsaw')
-    now_dt = datetime.now(warsaw_tz)
-    today = now_dt.date()
+now_dt = datetime.now(ZoneInfo("Europe/Warsaw"))
+today = now_dt.date()
+
     if 'current_week_start' not in st.session_state:
         st.session_state.current_week_start = today - timedelta(days=today.weekday())
     if 'selected_day_index' not in st.session_state:
@@ -261,6 +263,7 @@ except Exception as e:
     st.error(f"Wystąpił nieoczekiwany błąd: {e}")
 st.markdown("---")
 st.write("Made with ❤️ for you!")
+
 
 
 
