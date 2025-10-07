@@ -146,7 +146,7 @@ try:
     # --- NOWA FUNKCJA: Logika filtrowania ---
     if filter_magdalenka:
         # Zostawiamy tylko zajęcia dla grupy '1' lub 'd'
-        day_events = day_events[day_events['group'].isin(['1', 'd'])]
+        day_events = day_events[day_events['group'].isin(['11', 'd'])]
 
     st.markdown(f"### {selected_day_date.strftime('%A, %d.%m.%Y')}")
 
@@ -268,3 +268,4 @@ except FileNotFoundError:
     st.error("Nie znaleziono pliku `plan_zajec.xlsx`. Upewnij się, że plik znajduje się w repozytorium.")
 except Exception as e:
     st.error(f"Wystąpił nieoczekiwany błąd: {e}")
+
