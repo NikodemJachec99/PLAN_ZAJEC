@@ -3,9 +3,10 @@ import pandas as pd
 from datetime import datetime, timedelta, timezone, time as dtime
 import math
 import heapq
-import pytz
-from datetime import datetime
 from zoneinfo import ZoneInfo
+
+# --- STREFA CZASOWA ---
+TZ_WA = ZoneInfo("Europe/Warsaw")
 
 # --- USTAWIENIA STRONY ---
 st.set_page_config(page_title="Plan Zajęć ❤️", page_icon="📅", layout="centered")
@@ -130,8 +131,8 @@ try:
     df = load_data("plan_zajec.xlsx")
     st.title("Plan Zajęć ❤️")
 
-    tz = pytz.timezone("Europe/Berlin")
-    now_dt = datetime.now(timezone.utc).astimezone(tz)
+    # Czas Warszawy: licz zawsze od UTC i konwertuj
+    now_dt = datetime.now(timezone.utc).astimezone(TZ_WA)
     today = now_dt.date()
 
     if 'current_week_start' not in st.session_state:
@@ -156,11 +157,11 @@ try:
         st.session_state.current_week_start += timedelta(days=7)
         st.rerun()
 
-    # 🔎 Skala wysokości 1 godziny (60–220 px); zapamiętujemy w sesji:
+    # Skala wysokości 1 godziny
     if 'hour_height' not in st.session_state:
         st.session_state.hour_height = 120
     st.session_state.hour_height = st.slider("Wysokość 1h (px)", 60, 220, st.session_state.hour_height, step=10, help="Zwiększ, jeśli treść zajęć się nie mieści")
-    PX_PER_MIN = st.session_state.hour_height / 60.0  # skala pionowa
+    PX_PER_MIN = st.session_state.hour_height / 60.0
 
     # Zakładki dni
     days_of_week_pl = ["Pon", "Wt", "Śr", "Czw", "Pt", "Sob", "Niedz"]
@@ -220,14 +221,14 @@ try:
     # Kolumny + klastry (równoległe obok siebie)
     positioned, cluster_cols = assign_columns_and_clusters(events)
 
-    # Render eventów (jednolinijkowe <div>)
+    # Render eventów
     events_html_parts = []
     for ev in positioned:
         total_cols = max(1, cluster_cols.get(ev["cluster_id"], 1))
         width_pct = 100 / total_cols
         left_pct = ev["col"] * width_pct
         top = (ev["start_min"] - start_m) * PX_PER_MIN
-        height = max(48, (ev["end_min"] - ev["start_min"]) * PX_PER_MIN)  # podniosłem min-wys na 48px
+        height = max(48, (ev["end_min"] - ev["start_min"]) * PX_PER_MIN)
         part = (
             f"<div class='event' style='top:{top:.2f}px;height:{height:.2f}px;"
             f"left:calc({left_pct}% + 2px);width:calc({width_pct}% - 6px);'>"
@@ -238,18 +239,16 @@ try:
         events_html_parts.append(part)
     events_html = "".join(events_html_parts)
 
-    # Linia TERAZ
-    # Linia TERAZ (czas warszawski)
+    # Linia TERAZ (czas Warszawy, poprawne wcięcie)
     now_wide_html = ""
-        if selected_day_date == today:
-            now_dt = datetime.now(timezone.utc).astimezone(tz)  # tz = pytz.timezone("Europe/Warsaw") wyżej
-            now_m = now_dt.hour * 60 + now_dt.minute
-            top_now = max(0, min(height_px, (now_m - start_m) * PX_PER_MIN))
-            now_wide_html = (
-                f"<div class='now-line-wide' style='top:{top_now:.2f}px'></div>"
-                f"<div class='now-badge' style='top:{top_now:.2f}px'>Teraz {now_dt.strftime('%H:%M')}</div>"
-    )
-
+    if selected_day_date == today:
+        now_dt_line = datetime.now(timezone.utc).astimezone(TZ_WA)
+        now_m = now_dt_line.hour * 60 + now_dt_line.minute
+        top_now = max(0, min(height_px, (now_m - start_m) * PX_PER_MIN))
+        now_wide_html = (
+            f"<div class='now-line-wide' style='top:{top_now:.2f}px'></div>"
+            f"<div class='now-badge' style='top:{top_now:.2f}px'>Teraz {now_dt_line.strftime('%H:%M')}</div>"
+        )
 
     # Layout
     day_layout_html = (
@@ -264,17 +263,6 @@ except FileNotFoundError:
     st.error("Nie znaleziono pliku `plan_zajec.xlsx`. Upewnij się, że plik znajduje się w repozytorium.")
 except Exception as e:
     st.error(f"Wystąpił nieoczekiwany błąd: {e}")
+
 st.markdown("---")
 st.write("Made with ❤️ for you!")
-
-
-
-
-
-
-
-
-
-
-
-
