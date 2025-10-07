@@ -32,11 +32,8 @@ def load_data(file_path: str) -> pd.DataFrame:
     df.dropna(subset=['date'], inplace=True)
 
     df['instructor'] = (
-        df['degree'].fillna('') + ' ' +
-        df['first_name'].fillna('') + ' ' +
-        df['last_name'].fillna('')
+        df['degree'].fillna('') + ' ' + df['first_name'].fillna('') + ' ' + df['last_name'].fillna('')
     ).str.strip()
-
     df['group'] = df['group'].fillna('---').astype(str)
 
     df['start_time_obj'] = pd.to_datetime(df['start_time'], format='%H:%M:%S', errors='coerce').dt.time
@@ -52,29 +49,23 @@ st.markdown("""
 <style>
   .stApp > header { background-color: transparent; }
   .main .block-container { padding: 1rem 1rem 5rem 1rem; }
-  h1 { text-align:center; color:#1a202c; margin-bottom:1.25rem; }
-
+  h1 { text-align:center; color:#1a202c; margin-bottom:1.0rem; }
   .week-range { text-align:center; font-size:1.25rem; font-weight:600; color:#2d3748; margin:0.25rem 0 0.75rem; }
-
-  /* Layout dnia: oś po lewej, płótno po prawej */
   .day-layout { display:grid; grid-template-columns:88px 1fr; gap:1rem; align-items:start; }
 
   /* Oś godzin */
   .timeline-rail { position:sticky; top:0; width:88px; border-right:2px solid #e2e8f0; }
-  .timeline-rail-inner { position:relative; height:var(--day-height, 720px); }
+  .timeline-rail-inner { position:relative; height:var(--day-height, 960px); }
   .tick { position:absolute; left:0; right:0; border-top:1px dashed #e2e8f0; }
   .tick-label { position:absolute; left:0; width:76px; text-align:right; font-size:0.8rem; color:#a0aec0; transform:translateY(-50%); padding-right:6px; }
 
-  /* Prawa kolumna – płótno na eventy */
-  .calendar-canvas { position:relative; min-height:var(--day-height, 720px); border-left:2px solid #e2e8f0; }
-
-  /* Eventy pozycjonowane absolutnie wg czasu + kolumna */
-  .event { position:absolute; box-sizing:border-box; padding:8px 10px; background:#0ea5e912; border:1px solid #38bdf8; border-radius:12px;
+  /* Płótno i eventy */
+  .calendar-canvas { position:relative; min-height:var(--day-height, 960px); border-left:2px solid #e2e8f0; }
+  .event { position:absolute; box-sizing:border-box; padding:10px 12px; background:#0ea5e912; border:1px solid #38bdf8; border-radius:12px;
            overflow:hidden; box-shadow:0 1px 2px rgba(0,0,0,.06); }
   .event .title { font-weight:700; color:#0f172a; margin-bottom:2px; }
-  .event .meta { font-size:.85rem; color:#334155; }
+  .event .meta { font-size:.85rem; color:#334155; line-height:1.2; }
 
-  /* Linia „Teraz” przez całą szerokość */
   .now-line-wide { position:absolute; left:0; right:0; border-top:2px solid #ef4444; z-index:3; }
   .now-badge { position:absolute; right:6px; transform:translateY(-100%); font-size:.75rem; color:#ef4444; z-index:4; background:transparent; }
 </style>
@@ -85,31 +76,22 @@ def to_minutes(t: dtime) -> int:
     return t.hour * 60 + t.minute
 
 def assign_columns_and_clusters(evts):
-    """
-    evts: list[dict] with keys start_min, end_min, ... ; assumes sorted by (start_min, end_min)
-    Returns: list with 'col' and 'cluster_id', plus dict cluster_id -> total_cols (max równoległych)
-    """
+    """Nadaje kolumny i identyfikuje klastry (ciągi nakładających się eventów)."""
     result = []
-    active = []  # min-heap by end_min: (end_min, col, idx)
-    free_cols = []  # min-heap of available column numbers
+    active = []        # min-heap po end_min: (end_min, col, idx)
+    free_cols = []     # min-heap z wolnymi numerami kolumn
     next_col = 0
-
-    clusters = []
-    current_cluster = []
-    cluster_id = -1
+    clusters, current_cluster = [], []
 
     for idx, ev in enumerate(evts):
-        # zamykamy skończone przed rozpoczęciem tego eventu
         while active and active[0][0] <= ev["start_min"]:
-            _, col_finished, finished_idx = heapq.heappop(active)
+            _, col_finished, _ = heapq.heappop(active)
             heapq.heappush(free_cols, col_finished)
 
-        # jeśli brak aktywnych -> domykamy poprzedni klaster
         if not active and current_cluster:
             clusters.append(current_cluster)
             current_cluster = []
 
-        # kolumna dla bieżącego eventu
         if free_cols:
             col = heapq.heappop(free_cols)
         else:
@@ -117,33 +99,25 @@ def assign_columns_and_clusters(evts):
             next_col += 1
 
         heapq.heappush(active, (ev["end_min"], col, idx))
-
-        # przypisz provisional col i cluster (tymczasowo -1)
-        res = {**ev, "col": col, "cluster_id": -1}
-        result.append(res)
+        result.append({**ev, "col": col, "cluster_id": -1})
         current_cluster.append((idx, ev["start_min"], ev["end_min"], col))
 
-    # domknij ostatni klaster
     if current_cluster:
         clusters.append(current_cluster)
 
-    # policz szerokość (liczbę kolumn) na klaster na bazie faktycznego maksimum równoległości
     cluster_cols = {}
     for c_id, items in enumerate(clusters):
-        # sweep w obrębie klastra
         points = []
         for _, s, e, _ in items:
             points.append((s, 1))
             points.append((e, -1))
-        points.sort(key=lambda x: (x[0], -x[1]))  # końce przed startami o tej samej minucie
-        cur, peak = 0, 0
-        for t, delta in points:
-            cur += delta
+        points.sort(key=lambda x: (x[0], -x[1]))
+        cur = peak = 0
+        for _, d in points:
+            cur += d
             peak = max(peak, cur)
-        total_cols = max(1, peak)
-        cluster_cols[c_id] = total_cols
-        # nadaj cluster_id wynikowym eventom
-        for idx, _, _, _ in items:
+        cluster_cols[c_id] = max(1, peak)
+        for idx, *_ in items:
             result[idx]["cluster_id"] = c_id
 
     return result, cluster_cols
@@ -176,6 +150,12 @@ try:
         st.session_state.current_week_start += timedelta(days=7)
         st.rerun()
 
+    # 🔎 Skala wysokości 1 godziny (60–220 px); zapamiętujemy w sesji:
+    if 'hour_height' not in st.session_state:
+        st.session_state.hour_height = 120
+    st.session_state.hour_height = st.slider("Wysokość 1h (px)", 60, 220, st.session_state.hour_height, step=10, help="Zwiększ, jeśli treść zajęć się nie mieści")
+    PX_PER_MIN = st.session_state.hour_height / 60.0  # skala pionowa
+
     # Zakładki dni
     days_of_week_pl = ["Pon", "Wt", "Śr", "Czw", "Pt", "Sob", "Niedz"]
     day_tabs = st.columns(7)
@@ -203,7 +183,6 @@ try:
 
     start_m, end_m = to_minutes(start_t), to_minutes(end_t)
     duration = max(60, end_m - start_m)
-    PX_PER_MIN = 1
     height_px = duration * PX_PER_MIN
 
     # Godzinowe ticki (lewa szyna)
@@ -212,10 +191,10 @@ try:
     ticks_html = []
     for h in range(first_tick_h, last_tick_h + 1):
         top = (h * 60 - start_m) * PX_PER_MIN
-        ticks_html.append(f"<div class='tick' style='top:{top}px'></div>")
-        ticks_html.append(f"<div class='tick-label' style='top:{top}px'>{h:02d}:00</div>")
+        ticks_html.append(f"<div class='tick' style='top:{top:.2f}px'></div>")
+        ticks_html.append(f"<div class='tick-label' style='top:{top:.2f}px'>{h:02d}:00</div>")
 
-    # Przygotowanie eventów do pozycjonowania
+    # Eventy źródłowe
     events = []
     for _, e in day_events.iterrows():
         if pd.isna(e['start_time_obj']) or pd.isna(e['end_time_obj']):
@@ -232,19 +211,19 @@ try:
         })
     events.sort(key=lambda x: (x["start_min"], x["end_min"]))
 
-    # Nadanie kolumn i klastrów (zapewnia side-by-side dla równoległych)
+    # Kolumny + klastry (równoległe obok siebie)
     positioned, cluster_cols = assign_columns_and_clusters(events)
 
-    # Render jednolinijkowych <div> eventów
+    # Render eventów (jednolinijkowe <div>)
     events_html_parts = []
     for ev in positioned:
-        total_cols = cluster_cols.get(ev["cluster_id"], 1)
-        width_pct = 100 / max(1, total_cols)
+        total_cols = max(1, cluster_cols.get(ev["cluster_id"], 1))
+        width_pct = 100 / total_cols
         left_pct = ev["col"] * width_pct
         top = (ev["start_min"] - start_m) * PX_PER_MIN
-        height = max(24, (ev["end_min"] - ev["start_min"]) * PX_PER_MIN)
+        height = max(48, (ev["end_min"] - ev["start_min"]) * PX_PER_MIN)  # podniosłem min-wys na 48px
         part = (
-            f"<div class='event' style='top:{top}px;height:{height}px;"
+            f"<div class='event' style='top:{top:.2f}px;height:{height:.2f}px;"
             f"left:calc({left_pct}% + 2px);width:calc({width_pct}% - 6px);'>"
             f"<div class='title'>{ev['subject']}</div>"
             f"<div class='meta'>{ev['start_str']}–{ev['end_str']} • Sala {ev['room']} • Gr {ev['group']}<br>{ev['instructor']}</div>"
@@ -260,19 +239,15 @@ try:
         now_m = now_dt.hour * 60 + now_dt.minute
         top_now = max(0, min(height_px, (now_m - start_m) * PX_PER_MIN))
         now_wide_html = (
-            f"<div class='now-line-wide' style='top:{top_now}px'></div>"
-            f"<div class='now-badge' style='top:{top_now}px'>Teraz {now_dt.strftime('%H:%M')}</div>"
+            f"<div class='now-line-wide' style='top:{top_now:.2f}px'></div>"
+            f"<div class='now-badge' style='top:{top_now:.2f}px'>Teraz {now_dt.strftime('%H:%M')}</div>"
         )
 
-    # Składamy layout
+    # Layout
     day_layout_html = (
-        f"<div class='day-layout' style='--day-height:{height_px}px'>"
-        f"<div class='timeline-rail'><div class='timeline-rail-inner' style='height:{height_px}px'>"
-        f"{''.join(ticks_html)}"
-        f"</div></div>"
-        f"<div class='calendar-canvas' style='min-height:{height_px}px'>"
-        f"{now_wide_html}{events_html if events_html else '<div style=\"padding:12px;color:#64748b;\">Brak zajęć</div>'}"
-        f"</div>"
+        f"<div class='day-layout' style='--day-height:{height_px:.2f}px'>"
+        f"<div class='timeline-rail'><div class='timeline-rail-inner' style='height:{height_px:.2f}px'>{''.join(ticks_html)}</div></div>"
+        f"<div class='calendar-canvas' style='min-height:{height_px:.2f}px'>{now_wide_html}{events_html if events_html else '<div style=\"padding:12px;color:#64748b;\">Brak zajęć</div>'}</div>"
         f"</div>"
     )
     st.markdown(day_layout_html, unsafe_allow_html=True)
