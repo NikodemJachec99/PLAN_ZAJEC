@@ -26,6 +26,7 @@ def load_data(file_path):
     df_cleaned['instructor'] = (df_cleaned['degree'].fillna('') + ' ' + df_cleaned['first_name'].fillna('') + ' ' + df_cleaned['last_name'].fillna('')).str.strip()
     df_cleaned['group'] = df_cleaned['group'].fillna('---').astype(str)
     
+    # Zachowujemy zarówno obiekty czasu, jak i wersje tekstowe HH:MM
     df_cleaned['start_time_obj'] = pd.to_datetime(df_cleaned['start_time'], format='%H:%M:%S', errors='coerce').dt.time
     df_cleaned['end_time_obj']   = pd.to_datetime(df_cleaned['end_time'],   format='%H:%M:%S', errors='coerce').dt.time
     df_cleaned['start_time'] = df_cleaned['start_time_obj'].apply(lambda x: x.strftime('%H:%M') if pd.notnull(x) else 'Błąd')
@@ -142,8 +143,8 @@ try:
         height_px = duration * PX_PER_MIN
 
         # Godzinowe „kreski”
-        first_tick_h, last_tick_h = math.ceil(start_m / 60), math.floor(end_m / 60)
         ticks_html = []
+        first_tick_h, last_tick_h = math.ceil(start_m / 60), math.floor(end_m / 60)
         for h in range(first_tick_h, last_tick_h + 1):
             top = (h * 60 - start_m) * PX_PER_MIN
             ticks_html.append(f"<div class='tick' style='top:{top}px'></div>")
@@ -182,8 +183,8 @@ try:
             """)
 
         # --- POPRAWKA TUTAJ ---
-        # Łączymy wszystko w jeden blok i renderujemy RAZ z unsafe_allow_html=True
-        timeline_html = f"""
+        # Łączymy wszystkie elementy w jeden blok HTML i renderujemy go na końcu
+        final_html = f"""
         <div class="timeline-wrapper" style="height:{height_px + 20}px">
             <div class="timeline-background"></div>
             {''.join(ticks_html)}
@@ -191,7 +192,7 @@ try:
             {now_html}
         </div>
         """
-        st.markdown(timeline_html, unsafe_allow_html=True)
+        st.markdown(final_html, unsafe_allow_html=True) # <-- KLUCZOWY PARAMETR
     
     else:
         st.info("Brak zajęć w tym dniu.")
