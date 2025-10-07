@@ -41,6 +41,8 @@ def load_data(file_path: str) -> pd.DataFrame:
     df['instructor'] = (
         df['degree'].fillna('') + ' ' + df['first_name'].fillna('') + ' ' + df['last_name'].fillna('')
     ).str.strip()
+    
+    # --- POPRAWKA: Upewniamy się, że kolumna 'group' jest zawsze tekstem ---
     df['group'] = df['group'].fillna('---').astype(str)
 
     df['start_time_obj'] = pd.to_datetime(df['start_time'], format='%H:%M:%S', errors='coerce').dt.time
@@ -83,6 +85,7 @@ st.markdown("""
     .event { padding:4px 6px; border-radius:8px; }
     .event .title { font-size:.86rem; }
     .event .meta { font-size:.64rem; }
+    .stButton>button { padding:0.18rem 0.4rem !important; font-size:.78rem !important; }
   }
 </style>
 """, unsafe_allow_html=True)
@@ -96,20 +99,16 @@ try:
     df = load_data("plan_zajec.xlsx")
     st.title("Plan Zajęć ❤️")
 
-    # --- NOWA FUNKCJA: Checkbox do filtrowania grup ---
     filter_magdalenka = st.checkbox("Grupy Magdalenki")
-
-    # Czas Warszawy
+    
     now_dt = datetime.now(timezone.utc).astimezone(TZ_WA)
     today = now_dt.date()
 
-    # Stan sesji
     if 'current_week_start' not in st.session_state:
         st.session_state.current_week_start = today - timedelta(days=today.weekday())
     if 'selected_day_offset' not in st.session_state:
         st.session_state.selected_day_offset = min(today.weekday(), 4)
 
-    # Nawigacja tygodnia
     week_start = st.session_state.current_week_start
     week_end = week_start + timedelta(days=6)
 
@@ -126,10 +125,8 @@ try:
         st.session_state.current_week_start += timedelta(days=7)
         st.rerun()
 
-    # Skala pionowa
     PX_PER_MIN = HOUR_HEIGHT_PX / 60.0
 
-    # Zakładki dni (Pon–Pt)
     days_of_week_pl = ["Pon", "Wt", "Śr", "Czw", "Pt"]
     visible_offsets = [0, 1, 2, 3, 4]
     day_tabs = st.columns(len(visible_offsets))
@@ -139,18 +136,14 @@ try:
             st.session_state.selected_day_offset = off
             st.rerun()
 
-    # Dane dnia
     selected_day_date = week_start + timedelta(days=st.session_state.selected_day_offset)
     day_events = df[df['date'].dt.date == selected_day_date]
 
-    # --- NOWA FUNKCJA: Logika filtrowania ---
     if filter_magdalenka:
-        # Zostawiamy tylko zajęcia dla grupy '1' lub 'd'
-        day_events = day_events[day_events['group'].isin(['11', 'd'])]
+        day_events = day_events[day_events['group'].isin(['1', 'd'])]
 
     st.markdown(f"### {selected_day_date.strftime('%A, %d.%m.%Y')}")
 
-    # ---- OŚ CZASU + PŁÓTNO KALENDARZA ----
     base_start, base_end = dtime(7, 0), dtime(21, 0)
     base_start_m, base_end_m = to_minutes(base_start), to_minutes(base_end)
 
@@ -161,16 +154,10 @@ try:
         end_m   = min(base_end_m,   int(math.ceil((ev_end_m + 15) / 60) * 60))
     else:
         start_m, end_m = base_start_m, base_end_m
-        if not day_events.empty:
-            ev_min = day_events['start_time_obj'].dropna()
-            ev_max = day_events['end_time_obj'].dropna()
-            start_m = min([base_start_m] + ([min(map(to_minutes, ev_min))] if len(ev_min) else []))
-            end_m   = max([base_end_m]   + ([max(map(to_minutes, ev_max))] if len(ev_max) else []))
 
     duration = max(60, end_m - start_m)
     height_px = duration * PX_PER_MIN
 
-    # Godzinowe ticki
     ticks_html = []
     first_tick_h = math.ceil(start_m / 60)
     last_tick_h  = math.floor(end_m / 60)
@@ -179,7 +166,6 @@ try:
         ticks_html.append(f"<div class='tick' style='top:{top:.2f}px'></div>")
         ticks_html.append(f"<div class='tick-label' style='top:{top:.2f}px'>{h:02d}:00</div>")
 
-    # Eventy źródłowe
     events = []
     for _, e in day_events.iterrows():
         if pd.isna(e['start_time_obj']) or pd.isna(e['end_time_obj']): continue
@@ -189,12 +175,8 @@ try:
             "start_str": e["start_time"], "end_str": e["end_time"]
         })
     events.sort(key=lambda x: (x["start_min"], x["end_min"]))
-
-    # Reszta kodu bez zmian...
-    # (Algorytm kolumn, renderowanie eventów, linia TERAZ, składanie layoutu)
     
-    # Kolumny + klastry
-    # (Ten skomplikowany fragment jest skopiowany z Twojej wersji i pozostawiony bez zmian)
+    # Ten fragment jest skopiowany z Twojej wersji i pozostawiony bez zmian
     result = []
     active = []
     free_cols = []
@@ -226,7 +208,6 @@ try:
             result[idx]["cluster_id"] = c_id
     positioned = result
 
-    # Render eventów
     events_html_parts = []
     for ev in positioned:
         total_cols = max(1, cluster_cols.get(ev["cluster_id"], 1))
@@ -234,17 +215,23 @@ try:
         left_pct = ev["col"] * width_pct
         top = (ev["start_min"] - start_m) * PX_PER_MIN
         height = max(34, (ev["end_min"] - ev["start_min"]) * PX_PER_MIN)
+        
+        # --- POPRAWKA: Zabezpieczamy dane za pomocą html.escape() i str() ---
+        subject = html.escape(str(ev.get('subject', '')))
+        instructor = html.escape(str(ev.get('instructor', '')))
+        room = html.escape(str(ev.get('room', '')))
+        group = html.escape(str(ev.get('group', '')))
+        
         part = (
             f"<div class='event' style='top:{top:.2f}px;height:{height:.2f}px;"
             f"left:calc({left_pct}% + 2px);width:calc({width_pct}% - 6px);'>"
-            f"<div class='title'>{html.escape(ev['subject'])}</div>"
-            f"<div class='meta'>{ev['start_str']}–{ev['end_str']} • Sala {html.escape(ev['room'])} • Gr {html.escape(ev['group'])}<br>{html.escape(ev['instructor'])}</div>"
+            f"<div class='title'>{subject}</div>"
+            f"<div class='meta'>{ev['start_str']}–{ev['end_str']} • Sala {room} • Gr {group}<br>{instructor}</div>"
             f"</div>"
         )
         events_html_parts.append(part)
     events_html = "".join(events_html_parts)
 
-    # Linia TERAZ
     now_wide_html = ""
     if selected_day_date == today:
         now_dt_line = datetime.now(timezone.utc).astimezone(TZ_WA)
@@ -255,7 +242,6 @@ try:
             f"<div class='now-badge' style='top:{top_now:.2f}px'>Teraz {now_dt_line.strftime('%H:%M')}</div>"
         )
 
-    # Layout
     day_layout_html = (
         f"<div class='day-layout' style='--day-height:{height_px:.2f}px'>"
         f"<div class='timeline-rail'><div class='timeline-rail-inner' style='height:{height_px:.2f}px'>{''.join(ticks_html)}</div></div>"
@@ -268,4 +254,3 @@ except FileNotFoundError:
     st.error("Nie znaleziono pliku `plan_zajec.xlsx`. Upewnij się, że plik znajduje się w repozytorium.")
 except Exception as e:
     st.error(f"Wystąpił nieoczekiwany błąd: {e}")
-
