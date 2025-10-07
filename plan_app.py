@@ -1,13 +1,18 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
+import time
 
-def generate_html_schedule(df):
-    """
-    Generuje nowoczesny i estetyczny plan zajęć w formacie HTML,
-    zgodnie z nowymi wytycznymi dotyczącymi wyglądu.
-    """
-    # Przetwarzanie danych (logika pozostaje bez zmian)
+# --- Konfiguracja strony ---
+st.set_page_config(page_title="Interaktywny Plan Zajęć", page_icon="📅", layout="wide")
+
+# --- Wczytywanie i przetwarzanie danych ---
+@st.cache_data(ttl=600) # Odśwież dane co 10 minut
+def load_data(file_path):
+    """Wczytuje i przetwarza dane z pliku Excel."""
+    df = pd.read_excel(file_path, header=3)
+    
+    # Czyszczenie i formatowanie
     df.columns = [
         'date', 'day_of_week', 'start_time', 'end_time', 'subject', 'type',
         'degree', 'first_name', 'last_name', 'room', 'field_year', 'group',
@@ -16,227 +21,197 @@ def generate_html_schedule(df):
 
     df_cleaned = df[['date', 'day_of_week', 'start_time', 'end_time', 'subject', 'type', 'degree', 'first_name', 'last_name', 'room', 'group']].copy()
     df_cleaned.dropna(subset=['date'], inplace=True)
-
-    try:
-        df_cleaned['date'] = pd.to_datetime(df_cleaned['date'], errors='coerce')
-    except Exception as e:
-        print(f"Błąd konwersji daty: {e}")
-        # Awaryjnie próbujemy innego formatu, jeśli to konieczne
-        df_cleaned['date'] = pd.to_datetime(df_cleaned['date'], format='%d.%m.%Y', errors='coerce')
-
+    df_cleaned['date'] = pd.to_datetime(df_cleaned['date'], errors='coerce')
     df_cleaned.dropna(subset=['date'], inplace=True)
-    
+
     df_cleaned['instructor'] = (df_cleaned['degree'].fillna('') + ' ' + df_cleaned['first_name'].fillna('') + ' ' + df_cleaned['last_name'].fillna('')).str.strip()
-    df_cleaned['start_time'] = df_cleaned['start_time'].apply(lambda x: x.strftime('%H:%M') if isinstance(x, (datetime, pd.Timestamp)) else str(x)).str.slice(0, 5)
-    df_cleaned['end_time'] = df_cleaned['end_time'].apply(lambda x: x.strftime('%H:%M') if isinstance(x, (datetime, pd.Timestamp)) else str(x)).str.slice(0, 5)
     df_cleaned['group'] = df_cleaned['group'].fillna('---').astype(str)
     
-    df_cleaned['iso_year'] = df_cleaned['date'].dt.isocalendar().year
-    df_cleaned['iso_week'] = df_cleaned['date'].dt.isocalendar().week
-    df_cleaned.sort_values(by=['date', 'start_time'], inplace=True)
+    # Konwersja czasu na obiekty time dla łatwiejszych obliczeń
+    df_cleaned['start_time_obj'] = pd.to_datetime(df_cleaned['start_time'], format='%H:%M:%S', errors='coerce').dt.time
+    df_cleaned['end_time_obj'] = pd.to_datetime(df_cleaned['end_time'], format='%H:%M:%S', errors='coerce').dt.time
+    
+    # Formatowanie czasu do wyświetlania
+    df_cleaned['start_time'] = df_cleaned['start_time_obj'].apply(lambda x: x.strftime('%H:%M') if pd.notnull(x) else 'Błąd')
+    df_cleaned['end_time'] = df_cleaned['end_time_obj'].apply(lambda x: x.strftime('%H:%M') if pd.notnull(x) else 'Błąd')
 
-    # --- NOWY WYGLĄD (HTML & CSS) ---
-    html = """
-    <!DOCTYPE html>
-    <html lang="pl">
-    <head>
-        <meta charset="UTF-8">
-        <title>Plan Zajęć</title>
-        <link rel="preconnect" href="https://fonts.googleapis.com">
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-        <style>
-            :root {
-                --font-family-sans: 'Inter', sans-serif;
-                --background-color: #f8f9fa;
-                --card-background-color: #ffffff;
-                --text-color: #212529;
-                --header-gradient: linear-gradient(45deg, #1d2a35, #2c3e50);
-                --accent-color: #007bff;
-                --border-color: #dee2e6;
-                --shadow: 0 8px 16px rgba(0,0,0,0.05);
-                --border-radius: 12px;
-            }
-            body { 
-                font-family: var(--font-family-sans); 
-                background-color: var(--background-color); 
-                color: var(--text-color); 
-                margin: 0; 
-                padding: 2rem;
-            }
-            .container { 
-                max-width: 1400px; 
-                margin: auto;
-            }
-            h1 {
-                font-size: 2.5rem;
-                font-weight: 700;
-                text-align: center;
-                margin-bottom: 2.5rem;
-                color: #2c3e50;
-            }
-            .week-container { 
-                background-color: var(--card-background-color); 
-                border-radius: var(--border-radius); 
-                box-shadow: var(--shadow); 
-                margin-bottom: 2.5rem; 
-                overflow: hidden;
-                border: 1px solid var(--border-color);
-            }
-            .week-header { 
-                background: var(--header-gradient); 
-                color: white; 
-                padding: 1.5rem 2rem; 
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
-            }
-            .week-header h2 { 
-                margin: 0; 
-                font-size: 1.75rem;
-                font-weight: 600;
-            }
-            .week-header .date-range {
-                font-size: 1rem;
-                font-weight: 400;
-                opacity: 0.8;
-            }
-            .day-container { 
-                padding: 1.5rem 2rem;
-                border-bottom: 1px solid var(--border-color);
-            }
-            .day-container:last-child { border-bottom: none; }
-            h3 { 
-                font-size: 1.5rem;
-                font-weight: 600;
-                color: var(--accent-color); 
-                margin-top: 0;
-                margin-bottom: 1.5rem;
-            }
-            table { 
-                width: 100%; 
-                border-collapse: collapse;
-            }
-            th, td { 
-                padding: 1rem; 
-                text-align: left; 
-                border-bottom: 1px solid var(--border-color);
-                vertical-align: middle;
-            }
-            thead th {
-                position: sticky;
-                top: 0;
-                background-color: #f1f3f5;
-                color: #495057;
-                font-size: 0.875rem;
-                font-weight: 600;
-                text-transform: uppercase;
-                letter-spacing: 0.5px;
-            }
-            tr:nth-child(even) td { background-color: #f8f9fa; }
-            tr:hover td { background-color: #e9ecef; }
-            .class-time { font-weight: 600; color: #343a40; font-size: 1.05em; }
-            .class-subject { font-weight: 500; }
-            .class-instructor { font-style: italic; color: #6c757d; }
-            .badge {
-                display: inline-block;
-                padding: 0.4em 0.8em;
-                font-size: 0.85em;
-                font-weight: 500;
-                line-height: 1;
-                text-align: center;
-                white-space: nowrap;
-                vertical-align: baseline;
-                border-radius: 20px;
-                color: #fff;
-            }
-            .badge-type { background-color: #17a2b8; }
-            .badge-room { background-color: #dc3545; }
-            .badge-group { background-color: #6f42c1; }
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <h1>Oto Twój Plan Zajęć ❤️</h1>
-    """
+    df_cleaned.sort_values(by=['date', 'start_time_obj'], inplace=True)
+    return df_cleaned
 
-    for (year, week_num), week_df in df_cleaned.groupby(['iso_year', 'iso_week']):
-        start_date = week_df['date'].min().strftime('%d.%m.%Y')
-        end_date = week_df['date'].max().strftime('%d.%m.%Y')
-        html += f"""
-        <div class="week-container">
-            <div class="week-header">
-                <h2>Tydzień {week_num}</h2>
-                <span class="date-range">{start_date} - {end_date}</span>
-            </div>
-        """
-        for day, day_df in week_df.groupby('date'):
-            html += f"<div class='day-container'>"
-            html += f"<h3>{day_df['day_of_week'].iloc[0].capitalize()}, {day.strftime('%d.%m.%Y')}</h3>"
-            html += "<table><thead>"
-            html += "<tr><th>Godzina</th><th>Przedmiot</th><th>Typ</th><th>Wykładowca</th><th>Sala</th><th>Grupa</th></tr></thead><tbody>"
-            for _, row in day_df.iterrows():
-                html += f"""
-                <tr>
-                    <td class="class-time">{row['start_time']} - {row['end_time']}</td>
-                    <td class="class-subject">{row['subject']}</td>
-                    <td><span class="badge badge-type">{row['type']}</span></td>
-                    <td class="class-instructor">{row['instructor']}</td>
-                    <td><span class="badge badge-room">{row['room']}</span></td>
-                    <td><span class="badge badge-group">{row['group']}</span></td>
-                </tr>
-                """
-            html += "</tbody></table></div>"
-        html += "</div>"
+# --- Style CSS ---
+st.markdown("""
+<style>
+    /* Nawigacja */
+    .nav-container {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        background-color: #f8f9fa;
+        padding: 10px 20px;
+        border-radius: 12px;
+        margin-bottom: 2rem;
+        border: 1px solid #dee2e6;
+    }
+    .nav-container h2 {
+        margin: 0;
+        font-size: 1.75rem;
+        color: #2c3e50;
+    }
+    .week-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+        gap: 1.5rem;
+    }
+    /* Karta dnia */
+    .day-card {
+        background-color: #ffffff;
+        border-radius: 12px;
+        padding: 1.5rem;
+        border: 1px solid #dee2e6;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+        min-height: 400px;
+        position: relative; /* Potrzebne dla linii czasu */
+    }
+    .day-card.today {
+        border: 2px solid #007bff;
+        box-shadow: 0 8px 24px rgba(0,123,255,0.1);
+    }
+    .day-header {
+        margin-bottom: 1.5rem;
+        padding-bottom: 0.5rem;
+        border-bottom: 1px solid #f1f3f5;
+    }
+    .day-header h3 {
+        margin: 0;
+        color: #2c3e50;
+        font-size: 1.25rem;
+    }
+    .day-header span {
+        color: #6c757d;
+        font-size: 0.9rem;
+    }
+    /* Karta zajęć */
+    .class-card {
+        border-left: 4px solid #007bff;
+        padding: 0.8rem 1rem;
+        margin-bottom: 1rem;
+        background-color: #f8f9fa;
+        border-radius: 6px;
+    }
+    .class-time { font-weight: 600; color: #343a40; }
+    .class-subject { font-weight: 500; font-size: 1.05em; margin: 5px 0; }
+    .class-details { font-size: 0.85em; color: #6c757d; }
+    /* Linia czasu */
+    .timeline {
+        position: absolute;
+        left: 0;
+        right: 0;
+        height: 2px;
+        background-color: red;
+        z-index: 10;
+    }
+    .timeline::before {
+        content: '';
+        position: absolute;
+        left: -5px;
+        top: -4px;
+        width: 10px;
+        height: 10px;
+        background-color: red;
+        border-radius: 50%;
+    }
+</style>
+""", unsafe_allow_html=True)
 
-    html += """
-        </div>
-    </body>
-    </html>
-    """
-    return html
+# --- Logika aplikacji ---
+try:
+    df = load_data("plan_zajec.xlsx")
 
-# --- Aplikacja Streamlit z nowym wyglądem ---
-st.set_page_config(page_title="Plan Zajęć Madzi", page_icon="📅", layout="wide")
+    # Inicjalizacja stanu sesji
+    if 'current_week_start' not in st.session_state:
+        today = datetime.now().date()
+        # Początek tygodnia to poniedziałek
+        st.session_state.current_week_start = today - timedelta(days=today.weekday())
 
-st.title('Plan Zajęć Madzi')
-st.markdown("Przeciągnij i upuść plik Excel (`.xlsx`) z planem, a ja zamienię go w nowoczesny i interaktywny harmonogram.")
+    # --- Nawigacja ---
+    nav_cols = st.columns([1, 4, 1, 1])
+    with nav_cols[0]:
+        if st.button("⬅️ Poprzedni", use_container_width=True):
+            st.session_state.current_week_start -= timedelta(days=7)
+    with nav_cols[2]:
+        if st.button("Następny ➡️", use_container_width=True):
+            st.session_state.current_week_start += timedelta(days=7)
+    with nav_cols[3]:
+        if st.button("🗓️ Dzisiaj", use_container_width=True):
+            today = datetime.now().date()
+            st.session_state.current_week_start = today - timedelta(days=today.weekday())
+    
+    # Wyświetlanie daty
+    week_start = st.session_state.current_week_start
+    week_end = week_start + timedelta(days=6)
+    with nav_cols[1]:
+        st.markdown(f"<div class='nav-container'><h2>{week_start.strftime('%d.%m.%Y')} - {week_end.strftime('%d.%m.%Y')}</h2></div>", unsafe_allow_html=True)
 
-# Używamy kolumn do lepszego układu
-col1, col2 = st.columns([1, 2])
 
-with col1:
-    uploaded_file = st.file_uploader(
-        "Wybierz plik Excel z planem zajęć", 
-        type=['xlsx'],
-        help="Upewnij się, że nagłówek tabeli znajduje się w czwartym wierszu pliku."
-    )
+    # --- Wyświetlanie tygodnia ---
+    st.markdown('<div class="week-grid">', unsafe_allow_html=True)
+    
+    today_date = datetime.now().date()
+    current_time = datetime.now().time()
+    
+    days_of_week_pl = ["Poniedziałek", "Wtorek", "Środa", "Czwartek", "Piątek", "Sobota", "Niedziela"]
 
-if uploaded_file is not None:
-    try:
-        df = pd.read_excel(uploaded_file, header=3)
-        with col1:
-            st.success("Plik wczytany! Plan gotowy. ✨")
+    for i in range(7):
+        current_day = week_start + timedelta(days=i)
+        day_events = df[df['date'].dt.date == current_day]
         
-        html_output = generate_html_schedule(df)
+        is_today_class = "today" if current_day == today_date else ""
+        
+        with st.container():
+            st.markdown(f'<div class="day-card {is_today_class}">', unsafe_allow_html=True)
+            
+            # Nagłówek dnia
+            st.markdown(f"""
+            <div class="day-header">
+                <h3>{days_of_week_pl[i]}</h3>
+                <span>{current_day.strftime('%d.%m.%Y')}</span>
+            </div>
+            """, unsafe_allow_html=True)
 
-        st.subheader("Podgląd wygenerowanego planu")
-        st.components.v1.html(html_output, height=720, scrolling=True)
+            # Linia czasu (jeśli to dzisiejszy dzień)
+            if current_day == today_date:
+                # Oblicz pozycję procentową linii czasu (zakładamy dzień od 8:00 do 20:00)
+                day_start_hour = 8
+                day_end_hour = 20
+                total_minutes_in_day = (day_end_hour - day_start_hour) * 60
+                minutes_from_start = (current_time.hour - day_start_hour) * 60 + current_time.minute
+                
+                if 0 <= minutes_from_start <= total_minutes_in_day:
+                    top_percentage = (minutes_from_start / total_minutes_in_day) * 100
+                    st.markdown(f'<div class="timeline" style="top: {top_percentage}%;"></div>', unsafe_allow_html=True)
 
-        st.download_button(
-            label="Pobierz gotowy plan zajęć (HTML)",
-            data=html_output,
-            file_name=f"plan_zajec_{datetime.now().strftime('%Y-%m-%d')}.html",
-            mime="text/html",
-            use_container_width=True
-        )
-
-    except Exception as e:
-        st.error(f"Wystąpił błąd podczas przetwarzania pliku: {e}")
-        st.warning("Sprawdź, czy plik `.xlsx` ma poprawną strukturę (nagłówek w 4. wierszu).")
-else:
-    with col2:
-        st.info("Oczekuję na wgranie pliku...")
-
-st.markdown("---")
-st.write("Made with ❤️")
+            # Wyświetlanie zajęć
+            if not day_events.empty:
+                for _, event in day_events.iterrows():
+                    st.markdown(f"""
+                    <div class="class-card">
+                        <div class="class-time">{event['start_time']} - {event['end_time']}</div>
+                        <div class="class-subject">{event['subject']}</div>
+                        <div class="class-details">
+                            <span>{event['instructor']}</span> | 
+                            <span>{event['room']}</span> | 
+                            <span>{event['group']}</span>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+            else:
+                st.markdown("<p style='color: #adb5bd; text-align: center; margin-top: 2rem;'>Brak zajęć</p>", unsafe_allow_html=True)
+            
+            st.markdown('</div>', unsafe_allow_html=True)
+    
+    st.markdown('</div>', unsafe_allow_html=True)
+    
+except FileNotFoundError:
+    st.error("Nie znaleziono pliku `plan_zajec.xlsx`. Upewnij się, że plik znajduje się w repozytorium na GitHubie.")
+except Exception as e:
+    st.error(f"Wystąpił nieoczekiwany błąd: {e}")
