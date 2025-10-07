@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta, time as dtime
 import math
+import heapq
 
 # --- USTAWIENIA STRONY ---
 st.set_page_config(page_title="Interaktywny Plan Zajęć", page_icon="📅", layout="centered")
@@ -67,7 +68,7 @@ st.markdown("""
   /* Prawa kolumna – płótno na eventy */
   .calendar-canvas { position:relative; min-height:var(--day-height, 720px); border-left:2px solid #e2e8f0; }
 
-  /* Eventy pozycjonowane absolutnie wg czasu */
+  /* Eventy pozycjonowane absolutnie wg czasu + kolumna */
   .event { position:absolute; box-sizing:border-box; padding:8px 10px; background:#0ea5e912; border:1px solid #38bdf8; border-radius:12px;
            overflow:hidden; box-shadow:0 1px 2px rgba(0,0,0,.06); }
   .event .title { font-weight:700; color:#0f172a; margin-bottom:2px; }
@@ -78,6 +79,74 @@ st.markdown("""
   .now-badge { position:absolute; right:6px; transform:translateY(-100%); font-size:.75rem; color:#ef4444; z-index:4; background:transparent; }
 </style>
 """, unsafe_allow_html=True)
+
+# --- POMOCNICZE ---
+def to_minutes(t: dtime) -> int:
+    return t.hour * 60 + t.minute
+
+def assign_columns_and_clusters(evts):
+    """
+    evts: list[dict] with keys start_min, end_min, ... ; assumes sorted by (start_min, end_min)
+    Returns: list with 'col' and 'cluster_id', plus dict cluster_id -> total_cols (max równoległych)
+    """
+    result = []
+    active = []  # min-heap by end_min: (end_min, col, idx)
+    free_cols = []  # min-heap of available column numbers
+    next_col = 0
+
+    clusters = []
+    current_cluster = []
+    cluster_id = -1
+
+    for idx, ev in enumerate(evts):
+        # zamykamy skończone przed rozpoczęciem tego eventu
+        while active and active[0][0] <= ev["start_min"]:
+            _, col_finished, finished_idx = heapq.heappop(active)
+            heapq.heappush(free_cols, col_finished)
+
+        # jeśli brak aktywnych -> domykamy poprzedni klaster
+        if not active and current_cluster:
+            clusters.append(current_cluster)
+            current_cluster = []
+
+        # kolumna dla bieżącego eventu
+        if free_cols:
+            col = heapq.heappop(free_cols)
+        else:
+            col = next_col
+            next_col += 1
+
+        heapq.heappush(active, (ev["end_min"], col, idx))
+
+        # przypisz provisional col i cluster (tymczasowo -1)
+        res = {**ev, "col": col, "cluster_id": -1}
+        result.append(res)
+        current_cluster.append((idx, ev["start_min"], ev["end_min"], col))
+
+    # domknij ostatni klaster
+    if current_cluster:
+        clusters.append(current_cluster)
+
+    # policz szerokość (liczbę kolumn) na klaster na bazie faktycznego maksimum równoległości
+    cluster_cols = {}
+    for c_id, items in enumerate(clusters):
+        # sweep w obrębie klastra
+        points = []
+        for _, s, e, _ in items:
+            points.append((s, 1))
+            points.append((e, -1))
+        points.sort(key=lambda x: (x[0], -x[1]))  # końce przed startami o tej samej minucie
+        cur, peak = 0, 0
+        for t, delta in points:
+            cur += delta
+            peak = max(peak, cur)
+        total_cols = max(1, peak)
+        cluster_cols[c_id] = total_cols
+        # nadaj cluster_id wynikowym eventom
+        for idx, _, _, _ in items:
+            result[idx]["cluster_id"] = c_id
+
+    return result, cluster_cols
 
 # --- APLIKACJA ---
 try:
@@ -122,10 +191,8 @@ try:
     st.markdown(f"### {selected_day_date.strftime('%A, %d.%m.%Y')}")
 
     # ---- OŚ CZASU + PŁÓTNO KALENDARZA ----
-    def to_minutes(t: dtime) -> int:
-        return t.hour * 60 + t.minute
+    base_start, base_end = dtime(7, 0), dtime(21, 0)
 
-    base_start, base_end = dtime(7, 0), dtime(21, 0)  # lekko dociągnięte do 21:00
     if not day_events.empty:
         ev_min = day_events['start_time_obj'].dropna()
         ev_max = day_events['end_time_obj'].dropna()
@@ -135,8 +202,8 @@ try:
         start_t, end_t = base_start, base_end
 
     start_m, end_m = to_minutes(start_t), to_minutes(end_t)
-    duration = max(60, end_m - start_m)         # min. 1h
-    PX_PER_MIN = 1                               # skala: 1px = 1 minuta
+    duration = max(60, end_m - start_m)
+    PX_PER_MIN = 1
     height_px = duration * PX_PER_MIN
 
     # Godzinowe ticki (lewa szyna)
@@ -148,7 +215,7 @@ try:
         ticks_html.append(f"<div class='tick' style='top:{top}px'></div>")
         ticks_html.append(f"<div class='tick-label' style='top:{top}px'>{h:02d}:00</div>")
 
-    # Przygotowanie listy eventów (bez wcięć i nowych linii -> brak bloków kodu w Markdown)
+    # Przygotowanie eventów do pozycjonowania
     events = []
     for _, e in day_events.iterrows():
         if pd.isna(e['start_time_obj']) or pd.isna(e['end_time_obj']):
@@ -165,49 +232,28 @@ try:
         })
     events.sort(key=lambda x: (x["start_min"], x["end_min"]))
 
-    # Algorytm kolumn (równoległe zajęcia obok siebie)
-    positioned_clusters = []
-    active, cluster, cluster_cols = [], [], 0
-
-    def free_col(used_cols):
-        i = 0
-        while i in used_cols:
-            i += 1
-        return i
-
-    for ev in events:
-        active = [a for a in active if a["end_min"] > ev["start_min"]]
-        used = set(a["col"] for a in active)
-        col = free_col(used)
-        active.append({"end_min": ev["end_min"], "col": col})
-        cluster.append({**ev, "col": col})
-        cluster_cols = max(cluster_cols, len(active))
-        nxt_active = [a for a in active if a["end_min"] > ev["end_min"]]
-        if len(nxt_active) == 0:  # koniec klastra
-            max_cols = max(cluster_cols, max(a["col"] for a in active) + 1 if active else 1)
-            positioned_clusters.append((cluster, max_cols))
-            active, cluster, cluster_cols = [], [], 0
+    # Nadanie kolumn i klastrów (zapewnia side-by-side dla równoległych)
+    positioned, cluster_cols = assign_columns_and_clusters(events)
 
     # Render jednolinijkowych <div> eventów
     events_html_parts = []
-    for c_events, max_cols in positioned_clusters:
-        width_pct = 100 / max_cols
-        for ev in c_events:
-            top = (ev["start_min"] - start_m) * PX_PER_MIN
-            height = max(24, (ev["end_min"] - ev["start_min"]) * PX_PER_MIN)
-            left_pct = ev["col"] * width_pct
-            part = (
-                f"<div class='event' style='top:{top}px;height:{height}px;"
-                f"left:calc({left_pct}% + 2px);width:calc({width_pct}% - 6px);'>"
-                f"<div class='title'>{ev['subject']}</div>"
-                f"<div class='meta'>{ev['start_str']}–{ev['end_str']} • Sala {ev['room']} • Gr {ev['group']}<br>{ev['instructor']}</div>"
-                f"</div>"
-            )
-            events_html_parts.append(part)
-
+    for ev in positioned:
+        total_cols = cluster_cols.get(ev["cluster_id"], 1)
+        width_pct = 100 / max(1, total_cols)
+        left_pct = ev["col"] * width_pct
+        top = (ev["start_min"] - start_m) * PX_PER_MIN
+        height = max(24, (ev["end_min"] - ev["start_min"]) * PX_PER_MIN)
+        part = (
+            f"<div class='event' style='top:{top}px;height:{height}px;"
+            f"left:calc({left_pct}% + 2px);width:calc({width_pct}% - 6px);'>"
+            f"<div class='title'>{ev['subject']}</div>"
+            f"<div class='meta'>{ev['start_str']}–{ev['end_str']} • Sala {ev['room']} • Gr {ev['group']}<br>{ev['instructor']}</div>"
+            f"</div>"
+        )
+        events_html_parts.append(part)
     events_html = "".join(events_html_parts)
 
-    # Linia TERAZ na płótnie
+    # Linia TERAZ
     now_wide_html = ""
     if selected_day_date == today:
         now_dt = datetime.now()
@@ -218,7 +264,7 @@ try:
             f"<div class='now-badge' style='top:{top_now}px'>Teraz {now_dt.strftime('%H:%M')}</div>"
         )
 
-    # Składamy layout (UWAGA: zero wcięć przed eventami -> żadnych bloków kodu)
+    # Składamy layout
     day_layout_html = (
         f"<div class='day-layout' style='--day-height:{height_px}px'>"
         f"<div class='timeline-rail'><div class='timeline-rail-inner' style='height:{height_px}px'>"
