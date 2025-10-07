@@ -130,7 +130,7 @@ try:
     df = load_data("plan_zajec.xlsx")
     st.title("Plan Zajęć ❤️")
 
-    tz = pytz.timezone("Europe/Warsaw")
+    tz = pytz.timezone("Europe/Berlin")
     now_dt = datetime.now(timezone.utc).astimezone(tz)
     today = now_dt.date()
 
@@ -264,6 +264,7 @@ except Exception as e:
     st.error(f"Wystąpił nieoczekiwany błąd: {e}")
 st.markdown("---")
 st.write("Made with ❤️ for you!")
+
 
 
 
