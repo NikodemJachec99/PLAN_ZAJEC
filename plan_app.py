@@ -7,8 +7,8 @@ import html
 from zoneinfo import ZoneInfo
 
 # --- STAŁE DLA GĘSTOŚCI WIDOKU ---
-HOUR_HEIGHT_PX = 65      # 1h = 65px. Zmniejsz do 60/55, gdy chcesz jeszcze ciaśniej.
-COMPACT_RANGE  = True      # przycinaj widok do zakresu zajęć (+/- 15 min)
+HOUR_HEIGHT_PX = 65
+COMPACT_RANGE  = True
 TZ_WA = ZoneInfo("Europe/Warsaw")
 
 # --- USTAWIENIA STRONY ---
@@ -41,7 +41,9 @@ def load_data(file_path: str) -> pd.DataFrame:
     df['instructor'] = (
         df['degree'].fillna('') + ' ' + df['first_name'].fillna('') + ' ' + df['last_name'].fillna('')
     ).str.strip()
-    df['group'] = df['group'].fillna('---').astype(str)
+    
+    # --- POPRAWKA: Czyszczenie nazw grup z niewidocznych spacji ---
+    df['group'] = df['group'].fillna('---').astype(str).str.strip()
 
     df['start_time_obj'] = pd.to_datetime(df['start_time'], format='%H:%M:%S', errors='coerce').dt.time
     df['end_time_obj']   = pd.to_datetime(df['end_time'],   format='%H:%M:%S', errors='coerce').dt.time
@@ -137,7 +139,6 @@ try:
     selected_day_date = week_start + timedelta(days=st.session_state.selected_day_offset)
     day_events = df[df['date'].dt.date == selected_day_date]
 
-    # --- POPRAWKA: Logika filtrowania uwzględnia teraz grupę "cały rok" ---
     if filter_magdalenka:
         magdalenka_groups = ['1', 'd', 'cały rok']
         day_events = day_events[day_events['group'].isin(magdalenka_groups)]
