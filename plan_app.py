@@ -179,7 +179,7 @@ try:
         st.session_state.current_week_start += timedelta(days=7)
         st.rerun()
 
-    # ✅ Checkbox do filtrowania „grupy Magdalenki”
+    # ✅ Checkbox do filtrowania „Grupy Magdalenki”
     filter_magdalenki = st.checkbox("**:red[grupy Magdalenki]**", value=False)
 
     # Skala pionowa (bez suwaka)
@@ -344,6 +344,7 @@ except FileNotFoundError:
     st.error("Nie znaleziono pliku `plan_zajec.xlsx`. Upewnij się, że plik znajduje się w repozytorium.")
 except Exception as e:
     st.error(f"Wystąpił nieoczekiwany błąd: {e}")
+
 
 
 
