@@ -180,7 +180,7 @@ try:
         st.rerun()
 
     # ✅ Checkbox do filtrowania „Grupy Magdalenki”
-    filter_magdalenki = st.checkbox("**:red[grupy Magdalenki]**", value=False)
+    filter_magdalenki = st.checkbox("**:red[Grupy Magdalenki]**", value=False)
 
     # Skala pionowa (bez suwaka)
     PX_PER_MIN = HOUR_HEIGHT_PX / 60.0
@@ -344,6 +344,7 @@ except FileNotFoundError:
     st.error("Nie znaleziono pliku `plan_zajec.xlsx`. Upewnij się, że plik znajduje się w repozytorium.")
 except Exception as e:
     st.error(f"Wystąpił nieoczekiwany błąd: {e}")
+
 
 
 
