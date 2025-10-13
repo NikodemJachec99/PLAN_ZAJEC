@@ -30,7 +30,9 @@ try:
 except Exception:
     st.markdown("<script>setTimeout(()=>window.location.reload(), 60000);</script>", unsafe_allow_html=True)
 
-# --- PARSERY ---
+# =========================
+# PARSERY
+# =========================
 @st.cache_data(ttl=600)
 def load_data(file_path: str) -> pd.DataFrame:
     df = pd.read_excel(file_path, header=3)
@@ -73,102 +75,169 @@ def _month_from_label(lbl):
     if not isinstance(lbl, str): return None
     return MONTHS_PL.get(_norm(lbl.strip().upper()))
 
-@st.cache_data(ttl=600)
-@st.cache_data(ttl=600)
-def load_practicals_group11(file_path: str) -> pd.DataFrame:
-    """
-    Parser praktyk dla grupy 11, zakładając, że dane znajdują się ZAWSZE w 16. wierszu.
-    - Wiersz 0..1: nagłówki
-    - Wiersz 2: w kolumnach nazwy miesięcy (np. 'PAŹDZIERNIK', 'LISTOPAD'...)
-    - Wiersz 3: skrót dnia tygodnia (pn, wt, ...)
-    - Wiersz 4: dzień miesiąca (liczby)
-    - Wiersz 15 (16. wiersz w pliku): dane dla grupy 11
-    - W komórkach: kody + PRZEDZIAŁ CZASU, np. "CSM7   8:00-11:45", "UP 15:00-19:30"
-    Zwracamy tylko wydarzenia dla grupy 11.
-    """
-    raw = pd.read_excel(file_path, sheet_name="grafik", header=None)
-
-    # Użyj na sztywno 16. wiersza (indeks 15) dla grupy 11
-    GRP_ROW_INDEX = 15
-    if GRP_ROW_INDEX >= len(raw):
-        st.warning("Plik z praktykami nie ma wystarczającej liczby wierszy (oczekiwano przynajmniej 16).")
-        return pd.DataFrame()
-
-    # Rok akademicki np. "2024/2025" w wierszu 1, kol 0
-    header_text = str(raw.iat[1, 0]) if pd.notna(raw.iat[1, 0]) else ""
-    m = re.search(r'(20\d{2})/(20\d{2})', header_text)
-    start_year, end_year = (int(m.group(1)), int(m.group(2))) if m else (2024, 2025)
-
-    # Mapowanie: kolumna -> data (miesiąc w wierszu 2, dzień w wierszu 4)
-    col_date = {}
-    current_month_num = None
-    for c in range(1, raw.shape[1]):
-        mcell = raw.iat[2, c]
-        mm = _month_from_label(mcell) if isinstance(mcell, str) else None
-        if mm:
-            current_month_num = mm
-        d = raw.iat[4, c]
-        if pd.notna(d) and current_month_num is not None:
-            try:
-                day = int(str(d).strip())
-                year = start_year if current_month_num >= 10 else end_year
-                col_date[c] = pd.to_datetime(f"{year}-{current_month_num:02d}-{day:02d}").date()
-            except Exception:
-                pass  # pomijamy błędy w datach
-
-    # Ekstrakcja wydarzeń z wiersza grupy 11
-    time_re = re.compile(r'(\d{1,2}:\d{2})\s*[-–]\s*(\d{1,2}:\d{2})')
-    rows = []
-    # Pobierz dane bezpośrednio z 16. wiersza (indeks 15)
-    row_data = raw.iloc[GRP_ROW_INDEX]
-
-    for c, dt_ in col_date.items():
-        cell = row_data.iloc[c]
-        if pd.isna(cell) or str(cell).strip() == "":
-            continue
-
-        s = " ".join(str(cell).split())
-        m = time_re.search(s)
-        if not m:
-            continue
-
-        start_str, end_str = m.group(1), m.group(2)
-
-        # etykieta bez "godz." i bez samego przedziału czasu
-        label = re.sub(r'(?i)godz\.\s*', '', s)
-        label = label.replace(m.group(0), '').strip(" -–•.,;")
-
-        try:
-            stime = pd.to_datetime(start_str, format="%H:%M").time()
-            etime = pd.to_datetime(end_str,   format="%H:%M").time()
-        except Exception:
-            continue
-
-        rows.append({
-            "date": pd.to_datetime(dt_),
-            "subject": (label if label else "Zajęcia praktyczne"),
-            "instructor": "Praktyki", # Można wpisać stałą wartość
-            "room": "", # Informacja o sali jest w etykiecie
-            "group": "11",
-            "start_time_obj": stime,
-            "end_time_obj": etime,
-            "start_time": stime.strftime("%H:%M"),
-            "end_time": etime.strftime("%H:%M"),
-        })
-
-    out = pd.DataFrame(rows)
-    if not out.empty:
-        out.sort_values(by=["date", "start_time_obj"], inplace=True)
-        out.reset_index(drop=True, inplace=True)
-    return out
-
-def find_first_existing(paths):
+def _first_existing(paths):
     for p in paths:
         if os.path.exists(p):
             return p
     return None
 
-# --- STYLE (bez zmian) ---
+@st.cache_data(ttl=600)
+def load_practicals_group11_precise(file_path: str) -> pd.DataFrame:
+    """
+    Parser praktyk *konkretnej* struktury, zgodnie z Twoim opisem:
+    - Wiersz 2: miesiące (napisy)
+    - Wiersz 4: dni miesiąca (liczby)
+    - Wiersz 16: ZAWSZE dane grupy 11 (fallback: znajdź '11' w kol. 0)
+    - Wiersze 21..39: słownik KOD -> OPIS zajęć
+    - Komórki grupy 11 mogą mieć kilka zakresów czasu (np. 'CSM7 8:00-11:45; UP 12:00-14:00')
+    """
+    raw = pd.read_excel(file_path, sheet_name="grafik", header=None)
+
+    rows, cols = raw.shape
+
+    # --- 1) MAPA KOD -> OPIS z wierszy 21..39 ---
+    code_map = {}
+    for r in range(21, min(40, rows)):  # 21..39
+        # sprawdź kilka pierwszych kolumn, bo bywa różnie rozmieszczone
+        for c in range(0, min(6, cols)):
+            cell = raw.iat[r, c]
+            if isinstance(cell, str) and cell.strip():
+                s = " ".join(cell.split())
+                # Spróbuj "KOD - opis", "KOD opis", "KOD: opis"
+                # Znormalizuj do porównań, ale zachowaj oryginał do opisu
+                s_norm = _norm(s).strip()
+                m = re.match(r'^([A-Za-z0-9]{2,10})\s*[-–:]*\s*(.+)$', s_norm)
+                if m:
+                    code = m.group(1).upper()
+                    desc = m.group(2).strip()
+                    if code and code not in code_map:
+                        code_map[code] = desc
+                else:
+                    # e.g. "CSM7" samo w komórce, opis może być w sąsiedniej kolumnie
+                    m2 = re.match(r'^([A-Za-z0-9]{2,10})$', s_norm)
+                    if m2:
+                        code = m2.group(1).upper()
+                        # poszukaj opisu obok
+                        neigh = None
+                        for cc in range(c+1, min(c+3, cols)):
+                            cell2 = raw.iat[r, cc]
+                            if isinstance(cell2, str) and cell2.strip():
+                                neigh = " ".join(cell2.split())
+                                break
+                        if code and neigh and code not in code_map:
+                            code_map[code] = _norm(neigh).strip()
+    # --- 2) KOLUMNA -> DATA (miesiąc w wierszu 2, dzień w 4) ---
+    col_date = {}
+    current_month_num = None
+    for c in range(1, cols):
+        mcell = raw.iat[2, c] if 2 < rows else None
+        if isinstance(mcell, str) and mcell.strip():
+            mm = _month_from_label(mcell)
+            if mm:
+                current_month_num = mm
+        d = raw.iat[4, c] if 4 < rows else None
+        if pd.notna(d) and current_month_num is not None:
+            try:
+                day = int(str(d).strip())
+                # rok: jesień (>=10) to pierwszy rok, <10 to drugi
+                # Spróbuj znaleźć "YYYY/YYYY" w okolicy A2/A1; jak nie ma, załóż bieżący +/-
+                header_text = str(raw.iat[1, 0]) if (rows > 1 and pd.notna(raw.iat[1, 0])) else ""
+                mm = re.search(r'(20\d{2})/(20\d{2})', header_text)
+                if mm:
+                    start_year, end_year = int(mm.group(1)), int(mm.group(2))
+                else:
+                    # fallback: prosta heurystyka roku akademickiego
+                    today = datetime.now().date()
+                    start_year = today.year if today.month >= 10 else today.year - 1
+                    end_year = start_year + 1
+                year = start_year if current_month_num >= 10 else end_year
+                col_date[c] = pd.to_datetime(f"{year}-{current_month_num:02d}-{day:02d}").date()
+            except Exception:
+                pass
+
+    # --- 3) WIERSZ GRUPY 11: zawsze 16 (0-based = 16), ale zróbmy fallback ---
+    grp_row_idx = 16 if rows > 16 else None
+    if grp_row_idx is None or not str(raw.iat[grp_row_idx, 0]).strip():
+        # fallback: szukaj '11' w pierwszej kolumnie
+        for i, v in raw.iloc[:, 0].items():
+            if str(v).strip().isdigit() and int(v) == 11:
+                grp_row_idx = i
+                break
+    if grp_row_idx is None:
+        return pd.DataFrame(columns=["date","subject","instructor","room","group",
+                                     "start_time_obj","end_time_obj","start_time","end_time"])
+
+    # --- 4) CZYTANIE KOMÓREK W WIERSZU GRUPY 11 ---
+    time_re = re.compile(r'(\d{1,2}:\d{2})\s*[-–]\s*(\d{1,2}:\d{2})')
+    code_re = re.compile(r'\b([A-Za-z]{2,}[0-9]{0,3})\b')  # np. CSM7, UP, itp.
+    rows_out = []
+
+    row = raw.iloc[grp_row_idx, :]
+    for c, the_date in col_date.items():
+        cell = row.iloc[c]
+        if pd.isna(cell):
+            continue
+
+        # rozbij na segmenty: ';' lub nowa linia
+        pieces = re.split(r'[;\n]+', str(cell))
+        for piece in pieces:
+            s = " ".join(str(piece).split())
+            if not s:
+                continue
+
+            # znajdź wszystkie przedziały czasu w segmencie
+            times = list(time_re.finditer(s))
+            if not times:
+                continue
+
+            # przygotuj label: usuń "godz." i zakresy godzin, zbierz kod (do mapy)
+            s_clean = re.sub(r'(?i)godz\.\s*', '', s)
+            for m in times:
+                s_clean = s_clean.replace(m.group(0), "")
+            s_clean = s_clean.strip(" -–•.,;")
+
+            # wyłuskaj kod (jeśli jest)
+            code_match = code_re.search(s_clean.upper())
+            code = code_match.group(1).upper() if code_match else None
+
+            # docelowy subject: opis z mapy, albo „Praktyki [kod]”, albo czyszczony tekst
+            if code and code in code_map:
+                subject_label = code_map[code]
+            elif code:
+                subject_label = f"Praktyki {code}"
+            else:
+                subject_label = s_clean if s_clean else "Zajęcia praktyczne"
+
+            # wygeneruj event dla każdego zakresu czasu
+            for m in times:
+                start_str, end_str = m.group(1), m.group(2)
+                try:
+                    stime = pd.to_datetime(start_str, format="%H:%M").time()
+                    etime = pd.to_datetime(end_str,   format="%H:%M").time()
+                except Exception:
+                    continue
+
+                rows_out.append({
+                    "date": pd.to_datetime(the_date),
+                    "subject": subject_label,
+                    "instructor": "",
+                    "room": "",
+                    "group": "11",
+                    "start_time_obj": stime,
+                    "end_time_obj": etime,
+                    "start_time": stime.strftime("%H:%M"),
+                    "end_time": etime.strftime("%H:%M"),
+                })
+
+    out = pd.DataFrame(rows_out)
+    if not out.empty:
+        out.sort_values(by=["date", "start_time_obj"], inplace=True)
+        out.reset_index(drop=True, inplace=True)
+    return out
+
+# =========================
+# STYLE (jak było)
+# =========================
 st.markdown("""
 <style>
   html { font-size: 14px; }
@@ -177,18 +246,33 @@ st.markdown("""
   .main .block-container { padding: 0.5rem 0.6rem 3rem 0.6rem; }
   h1 { text-align:center; color:#1a202c; margin-bottom:0.6rem; font-size:1.35rem; }
   .week-range { text-align:center; font-size:1.05rem; font-weight:600; color:#2d3748; margin:0.2rem 0 0.6rem; }
-  .stButton>button { padding: 0.25rem 0.5rem !important; font-size: 0.85rem !important; line-height: 1.1 !important; border-radius: 8px !important; }
+
+  .stButton>button {
+    padding: 0.25rem 0.5rem !important;
+    font-size: 0.85rem !important;
+    line-height: 1.1 !important;
+    border-radius: 8px !important;
+  }
+
   .day-layout { display:grid; grid-template-columns:70px 1fr; gap:0.6rem; align-items:start; }
+
   .timeline-rail { position:sticky; top:0; width:70px; border-right:2px solid #e2e8f0; }
   .timeline-rail-inner { position:relative; height:var(--day-height, 720px); }
   .tick { position:absolute; left:0; right:0; border-top:1px dashed #e2e8f0; }
   .tick-label { position:absolute; left:0; width:60px; text-align:right; font-size:0.72rem; color:#94a3b8; transform:translateY(-50%); padding-right:4px; }
+
   .calendar-canvas { position:relative; min-height:var(--day-height, 720px); border-left:2px solid #e2e8f0; }
-  .event { position:absolute; box-sizing:border-box; padding:6px 8px; background:#0ea5e910; border:1px solid #38bdf8; border-radius:10px; overflow:hidden; box-shadow:0 1px 2px rgba(0,0,0,.05); }
+  .event {
+    position:absolute; box-sizing:border-box; padding:6px 8px;
+    background:#0ea5e910; border:1px solid #38bdf8; border-radius:10px;
+    overflow:hidden; box-shadow:0 1px 2px rgba(0,0,0,.05);
+  }
   .event .title { font-weight:700; color:#0f172a; margin-bottom:1px; font-size:0.92rem; }
   .event .meta { font-size:.72rem; color:#334155; line-height:1.15; }
+
   .now-line-wide { position:absolute; left:0; right:0; border-top:2px solid #ef4444; z-index:3; }
   .now-badge { position:absolute; right:6px; transform:translateY(-100%); font-size:.7rem; color:#ef4444; z-index:4; background:transparent; }
+
   @media (max-width: 640px) {
     html { font-size: 13px; }
     .day-layout { grid-template-columns:56px 1fr; gap:0.45rem; }
@@ -202,17 +286,18 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- POMOCNICZE ---
+# =========================
+# RYSOWANIE / LOGIKA UI (bez zmian funkcjonalnych poza scalamy df_main + df_pr)
+# =========================
 def to_minutes(t: dtime) -> int:
     return t.hour * 60 + t.minute
 
 def assign_columns_and_clusters(evts):
     result = []
-    active = []        # min-heap po end_min: (end_min, col, idx)
-    free_cols = []     # lista wolnych kolumn
+    active = []
+    free_cols = []
     next_col = 0
     clusters, current_cluster = [], []
-
     for idx, ev in enumerate(evts):
         while active and active[0][0] <= ev["start_min"]:
             _, col_finished, _ = heapq.heappop(active)
@@ -221,47 +306,38 @@ def assign_columns_and_clusters(evts):
         if not active and current_cluster:
             clusters.append(current_cluster)
             current_cluster = []
-
         col = free_cols.pop(0) if free_cols else next_col
         if col == next_col: next_col += 1
-
         heapq.heappush(active, (ev["end_min"], col, idx))
         result.append({**ev, "col": col, "cluster_id": -1})
         current_cluster.append((idx, ev["start_min"], ev["end_min"], col))
-
     if current_cluster:
         clusters.append(current_cluster)
-
     cluster_cols = {}
     for c_id, items in enumerate(clusters):
         points = []
         for _, s, e, _ in items:
-            points.append((s, 1))
-            points.append((e, -1))
+            points.append((s, 1)); points.append((e, -1))
         points.sort(key=lambda x: (x[0], -x[1]))
         cur = peak = 0
         for _, d in points:
-            cur += d
-            peak = max(peak, cur)
+            cur += d; peak = max(peak, cur)
         cluster_cols[c_id] = max(1, peak)
         for idx, *_ in items:
             result[idx]["cluster_id"] = c_id
-
     return result, cluster_cols
 
-# --- APLIKACJA ---
 try:
-    # 1) Główny plan
+    # Główny plan
     df_main = load_data(MAIN_PLAN_FILE)
 
-    # 2) Praktyki — tylko grupa 11
+    # Praktyki (grupa 11)
     df_pr = pd.DataFrame()
-    prat_file = find_first_existing(PRACTICAL_CANDIDATES)
+    prat_file = _first_existing(PRACTICAL_CANDIDATES)
     if prat_file:
         try:
-            df_pr = load_practicals_group11(prat_file)
+            df_pr = load_practicals_group11_precise(prat_file)
         except Exception:
-            # Jeśli plik/arkusz ma niespodzianki – nie wywalaj appki, po prostu pomiń
             df_pr = pd.DataFrame()
 
     st.title("Plan Zajęć ❤️")
@@ -293,12 +369,10 @@ try:
         st.session_state.current_week_start += timedelta(days=7)
         st.rerun()
 
-    # ✅ Checkbox „Grupy Magdalenki” – DZIAŁA TYLKO NA GŁÓWNY PLAN
+    # ✅ Checkbox „Grupy Magdalenki” – działa WYŁĄCZNIE na df_main
     filter_magdalenki = st.checkbox("**:red[Grupy Magdalenki]**", value=False)
 
-    # Przygotuj źródło danych:
-    # - df_main (ew. przefiltrowany checkboxem)
-    # - + df_pr (praktyki dla grupy 11) ZAWSZE dołączone
+    # Zastosuj filtr tylko do df_main
     df_main_src = df_main
     if filter_magdalenki:
         def _is_whole_year(g: str) -> bool:
@@ -310,18 +384,18 @@ try:
             if _is_whole_year(s):
                 return True
             if any(ch.isdigit() for ch in s):
-                # U Ciebie było 11 → zostawiam 11
                 return s == "11" or s.startswith("11")
-            # literowe: d
             return s == "d" or s.startswith("d")
 
         df_main_src = df_main[df_main["group"].apply(_keep_row)]
 
+    # Doklej praktyki (zawsze gr. 11)
     if not df_pr.empty:
         df_all = pd.concat([df_main_src, df_pr], ignore_index=True, sort=False)
-        df_all.sort_values(by=['date', 'start_time_obj'], inplace=True)
     else:
         df_all = df_main_src
+    if not df_all.empty:
+        df_all.sort_values(by=['date', 'start_time_obj'], inplace=True)
 
     # Skala pionowa
     PX_PER_MIN = HOUR_HEIGHT_PX / 60.0
@@ -465,6 +539,3 @@ except FileNotFoundError:
     st.error("Nie znaleziono pliku `plan_zajec.xlsx`. Upewnij się, że plik znajduje się w repozytorium.")
 except Exception as e:
     st.error(f"Wystąpił nieoczekiwany błąd: {e}")
-
-
-
