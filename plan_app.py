@@ -1,9 +1,19 @@
+import os
 import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta, timezone, time as dtime
 import math
 import heapq
 from zoneinfo import ZoneInfo
+
+# --- PLIKI Z PLANAMI (główny + praktyczne) ---
+# Możesz zmienić/rozszerzyć listę nazw. Jeśli pliku nie ma – zostanie pominięty.
+PLAN_FILES = [
+    "plan_zajec.xlsx",                                   # główny
+    "Pi_s_II_sem.-zimowy_26.09.2025 (1).xlsx",           # praktyczne (z Twojego załącznika)
+    "PI_s_II_26_09_2025 (1).xlsx",                       # ewentualna alternatywna nazwa
+    "zajecia_praktyczne.xlsx"                            # opcjonalny alias, jakbyś chciał sobie skrócić nazwę
+]
 
 # --- STAŁE DLA GĘSTOŚCI WIDOKU ---
 HOUR_HEIGHT_PX = 65         # 1h = 65px
@@ -21,18 +31,24 @@ except Exception:
     st.markdown("<script>setTimeout(()=>window.location.reload(), 60000);</script>", unsafe_allow_html=True)
 
 # --- WCZYTYWANIE DANYCH ---
-@st.cache_data(ttl=600)
-def load_data(file_path: str) -> pd.DataFrame:
-    df = pd.read_excel(file_path, header=3)
-
-    df.columns = [
+def _clean_df(df_raw: pd.DataFrame) -> pd.DataFrame:
+    # Dopasowanie nagłówków jak w dotychczasowym kodzie
+    exp_cols = [
         'date', 'day_of_week', 'start_time', 'end_time', 'subject', 'type',
         'degree', 'first_name', 'last_name', 'room', 'field_year', 'group',
         'info_combined', 'additional_info'
-    ] + [f'unnamed_{i}' for i in range(len(df.columns) - 14)]
+    ]
+    # Jeśli kolumn jest mniej/więcej – dopełnij
+    if len(df_raw.columns) >= len(exp_cols):
+        df_raw.columns = exp_cols + [f'unnamed_{i}' for i in range(len(df_raw.columns) - len(exp_cols))]
+    else:
+        # jakby było mniej kolumn – dociągnij brakujące
+        df_raw.columns = list(df_raw.columns) + [f'unnamed_{i}' for i in range(len(exp_cols) - len(df_raw.columns))]
+        df_raw.columns = exp_cols
 
-    df = df[['date', 'day_of_week', 'start_time', 'end_time', 'subject',
-             'type', 'degree', 'first_name', 'last_name', 'room', 'group']].copy()
+    df = df_raw[['date','day_of_week','start_time','end_time','subject','type',
+                 'degree','first_name','last_name','room','group']].copy()
+
     df.dropna(subset=['date'], inplace=True)
     df['date'] = pd.to_datetime(df['date'], errors='coerce')
     df.dropna(subset=['date'], inplace=True)
@@ -40,15 +56,61 @@ def load_data(file_path: str) -> pd.DataFrame:
     df['instructor'] = (
         df['degree'].fillna('') + ' ' + df['first_name'].fillna('') + ' ' + df['last_name'].fillna('')
     ).str.strip()
-    df['group'] = df['group'].fillna('---').astype(str)
+    df['group'] = df['group'].fillna('---').astype(str).str.strip()
 
-    df['start_time_obj'] = pd.to_datetime(df['start_time'], format='%H:%M:%S', errors='coerce').dt.time
-    df['end_time_obj']   = pd.to_datetime(df['end_time'],   format='%H:%M:%S', errors='coerce').dt.time
-    df['start_time'] = df['start_time_obj'].apply(lambda x: x.strftime('%H:%M') if pd.notnull(x) else 'Błąd')
-    df['end_time']   = df['end_time_obj'].apply(  lambda x: x.strftime('%H:%M') if pd.notnull(x) else 'Błąd')
+    # czasu bywają w różnych formatach – spróbuj najpierw %H:%M:%S, potem %H:%M
+    def parse_time(s):
+        t = pd.to_datetime(s, format='%H:%M:%S', errors='coerce')
+        if pd.isna(t):
+            t = pd.to_datetime(s, format='%H:%M', errors='coerce')
+        return t.dt.time if hasattr(t, "dt") else (t.time() if pd.notna(t) else None)
+
+    start_series = pd.to_datetime(df['start_time'], errors='coerce')
+    end_series   = pd.to_datetime(df['end_time'], errors='coerce')
+    # jeżeli nie zadziałało domyślnie, spróbuj formatów ręcznie
+    if start_series.isna().all():
+        start_series = pd.to_datetime(df['start_time'], format='%H:%M:%S', errors='coerce')
+        start_series = start_series.fillna(pd.to_datetime(df['start_time'], format='%H:%M', errors='coerce'))
+    if end_series.isna().all():
+        end_series = pd.to_datetime(df['end_time'], format='%H:%M:%S', errors='coerce')
+        end_series = end_series.fillna(pd.to_datetime(df['end_time'], format='%H:%M', errors='coerce'))
+
+    df['start_time_obj'] = start_series.dt.time
+    df['end_time_obj']   = end_series.dt.time
+    df['start_time']     = df['start_time_obj'].apply(lambda x: x.strftime('%H:%M') if pd.notnull(x) else 'Błąd')
+    df['end_time']       = df['end_time_obj'].apply(  lambda x: x.strftime('%H:%M') if pd.notnull(x) else 'Błąd')
 
     df.sort_values(by=['date', 'start_time_obj'], inplace=True)
     return df
+
+def _load_one(path: str) -> pd.DataFrame:
+    # Spróbuj z header=3 (jak dotąd), jeśli nie – header=0
+    try:
+        df_raw = pd.read_excel(path, header=3)
+    except Exception:
+        df_raw = pd.read_excel(path, header=0)
+    return _clean_df(df_raw)
+
+@st.cache_data(ttl=600)
+def load_many(paths: tuple) -> pd.DataFrame:
+    frames = []
+    for p in paths:
+        if os.path.exists(p):
+            try:
+                frames.append(_load_one(p))
+            except Exception as e:
+                st.warning(f"⚠️ Nie udało się wczytać „{p}”: {e}")
+        # brak pliku = ciche pominięcie
+    if not frames:
+        raise FileNotFoundError("Nie znaleziono żadnego z plików planu.")
+    df_all = pd.concat(frames, ignore_index=True)
+    # deduplikacja wg podstawowych pól
+    df_all.drop_duplicates(
+        subset=['date','start_time','end_time','subject','room','group','instructor'],
+        inplace=True
+    )
+    df_all.sort_values(by=['date','start_time'], inplace=True)
+    return df_all
 
 # --- STYLE: globalnie mniejsze, gęstsze, mniejsze przyciski ---
 st.markdown("""
@@ -149,7 +211,9 @@ def assign_columns_and_clusters(evts):
 
 # --- APLIKACJA ---
 try:
-    df = load_data("plan_zajec.xlsx")
+    # ⬇️ Wczytaj WSZYSTKIE istniejące pliki z listy
+    df = load_many(tuple(PLAN_FILES))
+
     st.title("Plan Zajęć ❤️")
 
     # Czas Warszawy
@@ -187,7 +251,7 @@ try:
 
     # Zakładki dni (Pon–Pt)
     days_of_week_pl = ["Pon", "Wt", "Śr", "Czw", "Pt", "Sob", "Niedz"]
-    visible_offsets = [0, 1, 2, 3, 4]  # bez sob/ndz jak wcześniej
+    visible_offsets = [0, 1, 2, 3, 4]  # Mon–Fri
     day_tabs = st.columns(len(visible_offsets))
     for i, off in enumerate(visible_offsets):
         current_day_date = week_start + timedelta(days=off)
@@ -195,22 +259,20 @@ try:
             st.session_state.selected_day_index = off
             st.rerun()
 
-    # --- Filtrowanie wg „grupy Magdalenki” ---
+    # --- Filtrowanie wg „grupy Magdalenki” (nie zmieniam innych zachowań) ---
     df_src = df
     if filter_magdalenki:
         def _is_whole_year(g: str) -> bool:
             s = (g or "").strip().lower()
-            # w tym projekcie puste -> '---'
             return (s in {"---", "rok", "wszyscy", "all", "year"}) or ("rok" in s) or ("wsz" in s)
 
         def _keep_row(grp: str) -> bool:
             s = (grp or "").strip().lower()
             if _is_whole_year(s):
                 return True
-            # jeśli wygląda na numeryczny schemat (zawiera cyfry) → bierzemy tylko '1' (np. '1', '1a' też przejdzie)
             if any(ch.isdigit() for ch in s):
+                # Uwaga: zostawiam jak w Twojej ostatniej wersji: "11"
                 return s == "11" or s.startswith("11")
-            # w przeciwnym razie traktujemy jako literowy → bierzemy tylko 'd'
             return s == "d" or s.startswith("d")
 
         df_src = df[df["group"].apply(_keep_row)]
@@ -341,11 +403,6 @@ try:
     st.markdown(day_layout_html, unsafe_allow_html=True)
 
 except FileNotFoundError:
-    st.error("Nie znaleziono pliku `plan_zajec.xlsx`. Upewnij się, że plik znajduje się w repozytorium.")
+    st.error("Nie znaleziono żadnego z plików planu. Upewnij się, że co najmniej jeden z nich jest w repozytorium.")
 except Exception as e:
     st.error(f"Wystąpił nieoczekiwany błąd: {e}")
-
-
-
-
-
