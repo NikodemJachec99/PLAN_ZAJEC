@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone, time as dtime
 import math
 import heapq
 import re
+import os
 from zoneinfo import ZoneInfo
 
 # --- STAŁE DLA GĘSTOŚCI WIDOKU ---
@@ -13,14 +14,13 @@ TZ_WA = ZoneInfo("Europe/Warsaw")
 
 # --- NAZWY PLIKÓW ---
 MAIN_PLAN_FILE = "plan_zajec.xlsx"
-# Spróbujemy po kolei tych ścieżek; jak żadna nie istnieje – praktyki są pomijane.
-PRACTICAL_FILES = [
-    "Pi_s_II_sem.-zimowy_26.09.2025 (1).xlsx",                    # jeśli masz w repo
-    "/mnt/data/Pi_s_II_sem.-zimowy_26.09.2025 (1).xlsx",          # jeśli odpalasz tu
-    "praktyki.xlsx",                                              # opcjonalna aliasowa nazwa
+PRACTICAL_CANDIDATES = [
+    "Pi_s_II_sem.-zimowy_26.09.2025 (1).xlsx",
+    "/mnt/data/Pi_s_II_sem.-zimowy_26.09.2025 (1).xlsx",
+    "praktyki.xlsx",
 ]
 
-# --- USTAWIENIA STRONY ---
+# --- STRONA ---
 st.set_page_config(page_title="Plan Zajęć ❤️", page_icon="📅", layout="centered")
 
 # --- AUTO-ODŚWIEŻANIE (60 s) ---
@@ -30,7 +30,7 @@ try:
 except Exception:
     st.markdown("<script>setTimeout(()=>window.location.reload(), 60000);</script>", unsafe_allow_html=True)
 
-# --- WCZYTYWANIE DANYCH (GŁÓWNY PLAN) ---
+# --- PARSERY ---
 @st.cache_data(ttl=600)
 def load_data(file_path: str) -> pd.DataFrame:
     df = pd.read_excel(file_path, header=3)
@@ -60,85 +60,100 @@ def load_data(file_path: str) -> pd.DataFrame:
     df.sort_values(by=['date', 'start_time_obj'], inplace=True)
     return df
 
-# --- WCZYTYWANIE PRAKTYK (ARKUSZ „grafik” o siatce: m-c w kolumnie, grupa w wierszu) ---
+def _norm(s: str) -> str:
+    return (s.replace('Ą','A').replace('Ć','C').replace('Ę','E').replace('Ł','L')
+             .replace('Ń','N').replace('Ó','O').replace('Ś','S').replace('Ż','Z').replace('Ź','Z'))
+
+MONTHS_PL = {
+    'STYCZEN':1, 'LUTY':2, 'MARZEC':3, 'KWIECIEN':4, 'MAJ':5, 'CZERWIEC':6,
+    'LIPIEC':7, 'SIERPIEN':8, 'WRZESIEN':9, 'PAZDZIERNIK':10, 'LISTOPAD':11, 'GRUDZIEN':12
+}
+
+def _month_from_label(lbl):
+    if not isinstance(lbl, str): return None
+    return MONTHS_PL.get(_norm(lbl.strip().upper()))
+
 @st.cache_data(ttl=600)
-def load_practical(file_path: str) -> pd.DataFrame:
+def load_practicals_group11(file_path: str) -> pd.DataFrame:
+    """
+    Parser praktyk *konkretnej* struktury z arkusza 'grafik':
+    - Wiersz 0..1: nagłówki
+    - Wiersz 2: w kolumnach nazwy miesięcy (np. 'PAŹDZIERNIK', 'LISTOPAD'...)
+    - Wiersz 3: skrót dnia tygodnia (pn, wt, ...)
+    - Wiersz 4: dzień miesiąca (liczby)
+    - Wiersze 5..16: numery grup (w kolumnie 0), nas interesuje wiersz z '11'
+    - W komórkach: kody + PRZEDZIAŁ CZASU, np. "CSM7    8:00-11:45", "UP 15:00-19:30"
+    Zwracamy tylko wydarzenia dla grupy 11.
+    """
     raw = pd.read_excel(file_path, sheet_name="grafik", header=None)
 
-    # Rok akademicki z nagłówka, np. "2024/2025"
+    # Znajdź wiersz grupy 11
+    grp_row_idx = None
+    for i, v in raw.iloc[:, 0].items():
+        if str(v).strip().isdigit() and int(v) == 11:
+            grp_row_idx = i
+            break
+    if grp_row_idx is None:
+        return pd.DataFrame(columns=["date","subject","instructor","room","group",
+                                     "start_time_obj","end_time_obj","start_time","end_time"])
+
+    # Rok akademicki np. "2024/2025" w wierszu 1, kol 0
     header_text = str(raw.iat[1, 0]) if pd.notna(raw.iat[1, 0]) else ""
     m = re.search(r'(20\d{2})/(20\d{2})', header_text)
     start_year, end_year = (int(m.group(1)), int(m.group(2))) if m else (2024, 2025)
 
-    def norm(s: str) -> str:
-        return (s.replace('Ą','A').replace('Ć','C').replace('Ę','E').replace('Ł','L')
-                 .replace('Ń','N').replace('Ó','O').replace('Ś','S').replace('Ż','Z').replace('Ź','Z'))
-
-    MONTHS = {
-        'STYCZEN':1, 'LUTY':2, 'MARZEC':3, 'KWIECIEN':4, 'MAJ':5, 'CZERWIEC':6,
-        'LIPIEC':7, 'SIERPIEN':8, 'WRZESIEN':9, 'PAZDZIERNIK':10, 'LISTOPAD':11, 'GRUDZIEN':12
-    }
-
-    def month_from_label(lbl):
-        if not isinstance(lbl, str): return None
-        return MONTHS.get(norm(lbl.strip().upper()))
-
-    # Kolumna -> data (miesiąc w wierszu 2, dzień w wierszu 4)
+    # Mapowanie: kolumna -> data (miesiąc w wierszu 2, dzień w wierszu 4)
     col_date = {}
     current_month_num = None
     for c in range(1, raw.shape[1]):
         mcell = raw.iat[2, c]
-        if isinstance(mcell, str) and mcell.strip():
-            mm = month_from_label(mcell)
-            if mm:
-                current_month_num = mm
+        mm = _month_from_label(mcell) if isinstance(mcell, str) else None
+        if mm:
+            current_month_num = mm
         d = raw.iat[4, c]
         if pd.notna(d) and current_month_num is not None:
             try:
-                day = int(d)
+                day = int(str(d).strip())
                 year = start_year if current_month_num >= 10 else end_year
-                col_date[c] = pd.to_datetime(f"{year}-{current_month_num:02d}-{day:02d}")
+                col_date[c] = pd.to_datetime(f"{year}-{current_month_num:02d}-{day:02d}").date()
             except Exception:
-                pass  # pomiń kolumny z błędną datą
+                pass  # pomijamy bzdury
 
-    # Wiersze grup (kolumna 0 zawiera numer grupy)
-    group_rows = [(idx, int(str(val).strip()))
-                  for idx, val in raw.iloc[:, 0].items()
-                  if pd.notna(val) and str(val).strip().isdigit()]
-
+    # Ekstrakcja wydarzeń z wiersza grupy 11
     time_re = re.compile(r'(\d{1,2}:\d{2})\s*[-–]\s*(\d{1,2}:\d{2})')
     rows = []
-    for r, g in group_rows:
-        for c, date in col_date.items():
-            cell = raw.iat[r, c]
-            if pd.isna(cell):
-                continue
-            s = " ".join(str(cell).split())
-            m = time_re.search(s)
-            if not m:
-                continue
-            start_str, end_str = m.group(1), m.group(2)
-            # label bez "godz." i bez przedziału czasu
-            label = re.sub(r'(?i)godz\.\s*', '', s)
-            label = label.replace(m.group(0), '').strip(" -–•.,;")
+    row = raw.iloc[grp_row_idx, :]
+    for c, dt_ in col_date.items():
+        cell = row.iloc[c]
+        if pd.isna(cell):
+            continue
+        s = " ".join(str(cell).split())
+        m = time_re.search(s)
+        if not m:
+            continue
+        start_str, end_str = m.group(1), m.group(2)
 
-            try:
-                stime = pd.to_datetime(start_str, format="%H:%M").time()
-                etime = pd.to_datetime(end_str,   format="%H:%M").time()
-            except Exception:
-                continue
+        # etykieta bez "godz." i bez samego przedziału czasu
+        label = re.sub(r'(?i)godz\.\s*', '', s)
+        label = label.replace(m.group(0), '').strip(" -–•.,;")
 
-            rows.append({
-                "date": date,
-                "subject": (label if label else "Zajęcia praktyczne"),
-                "instructor": "",
-                "room": "",
-                "group": str(g),
-                "start_time_obj": stime,
-                "end_time_obj": etime,
-                "start_time": stime.strftime("%H:%M"),
-                "end_time": etime.strftime("%H:%M"),
-            })
+        try:
+            stime = pd.to_datetime(start_str, format="%H:%M").time()
+            etime = pd.to_datetime(end_str,   format="%H:%M").time()
+        except Exception:
+            continue
+
+        rows.append({
+            "date": pd.to_datetime(dt_),            # pandas datetime64[D]
+            "subject": (label if label else "Zajęcia praktyczne"),
+            "instructor": "",
+            "room": "",
+            "group": "11",                          # zawsze 11
+            "start_time_obj": stime,
+            "end_time_obj": etime,
+            "start_time": stime.strftime("%H:%M"),
+            "end_time": etime.strftime("%H:%M"),
+        })
 
     out = pd.DataFrame(rows)
     if not out.empty:
@@ -146,7 +161,13 @@ def load_practical(file_path: str) -> pd.DataFrame:
         out.reset_index(drop=True, inplace=True)
     return out
 
-# --- STYLE (jak było) ---
+def find_first_existing(paths):
+    for p in paths:
+        if os.path.exists(p):
+            return p
+    return None
+
+# --- STYLE (bez zmian) ---
 st.markdown("""
 <style>
   html { font-size: 14px; }
@@ -155,33 +176,18 @@ st.markdown("""
   .main .block-container { padding: 0.5rem 0.6rem 3rem 0.6rem; }
   h1 { text-align:center; color:#1a202c; margin-bottom:0.6rem; font-size:1.35rem; }
   .week-range { text-align:center; font-size:1.05rem; font-weight:600; color:#2d3748; margin:0.2rem 0 0.6rem; }
-
-  .stButton>button {
-    padding: 0.25rem 0.5rem !important;
-    font-size: 0.85rem !important;
-    line-height: 1.1 !important;
-    border-radius: 8px !important;
-  }
-
+  .stButton>button { padding: 0.25rem 0.5rem !important; font-size: 0.85rem !important; line-height: 1.1 !important; border-radius: 8px !important; }
   .day-layout { display:grid; grid-template-columns:70px 1fr; gap:0.6rem; align-items:start; }
-
   .timeline-rail { position:sticky; top:0; width:70px; border-right:2px solid #e2e8f0; }
   .timeline-rail-inner { position:relative; height:var(--day-height, 720px); }
   .tick { position:absolute; left:0; right:0; border-top:1px dashed #e2e8f0; }
   .tick-label { position:absolute; left:0; width:60px; text-align:right; font-size:0.72rem; color:#94a3b8; transform:translateY(-50%); padding-right:4px; }
-
   .calendar-canvas { position:relative; min-height:var(--day-height, 720px); border-left:2px solid #e2e8f0; }
-  .event {
-    position:absolute; box-sizing:border-box; padding:6px 8px;
-    background:#0ea5e910; border:1px solid #38bdf8; border-radius:10px;
-    overflow:hidden; box-shadow:0 1px 2px rgba(0,0,0,.05);
-  }
+  .event { position:absolute; box-sizing:border-box; padding:6px 8px; background:#0ea5e910; border:1px solid #38bdf8; border-radius:10px; overflow:hidden; box-shadow:0 1px 2px rgba(0,0,0,.05); }
   .event .title { font-weight:700; color:#0f172a; margin-bottom:1px; font-size:0.92rem; }
   .event .meta { font-size:.72rem; color:#334155; line-height:1.15; }
-
   .now-line-wide { position:absolute; left:0; right:0; border-top:2px solid #ef4444; z-index:3; }
   .now-badge { position:absolute; right:6px; transform:translateY(-100%); font-size:.7rem; color:#ef4444; z-index:4; background:transparent; }
-
   @media (max-width: 640px) {
     html { font-size: 13px; }
     .day-layout { grid-template-columns:56px 1fr; gap:0.45rem; }
@@ -245,25 +251,17 @@ def assign_columns_and_clusters(evts):
 # --- APLIKACJA ---
 try:
     # 1) Główny plan
-    df = load_data(MAIN_PLAN_FILE)
+    df_main = load_data(MAIN_PLAN_FILE)
 
-    # 2) Praktyki — wczytaj pierwszy istniejący z listy
+    # 2) Praktyki — tylko grupa 11
     df_pr = pd.DataFrame()
-    for p in PRACTICAL_FILES:
+    prat_file = find_first_existing(PRACTICAL_CANDIDATES)
+    if prat_file:
         try:
-            df_pr = load_practical(p)
-            if not df_pr.empty:
-                break
-        except FileNotFoundError:
-            continue
+            df_pr = load_practicals_group11(prat_file)
         except Exception:
-            # jeśli arkusz inny / błąd — pomiń, nie wywalaj aplikacji
-            continue
-
-    # 3) Połącz (NIC nie zmieniamy w logice dalej — po prostu dorzucamy wiersze)
-    if not df_pr.empty:
-        df = pd.concat([df, df_pr], ignore_index=True, sort=False)
-        df.sort_values(by=['date', 'start_time_obj'], inplace=True)
+            # Jeśli plik/arkusz ma niespodzianki – nie wywalaj appki, po prostu pomiń
+            df_pr = pd.DataFrame()
 
     st.title("Plan Zajęć ❤️")
 
@@ -294,24 +292,13 @@ try:
         st.session_state.current_week_start += timedelta(days=7)
         st.rerun()
 
-    # ✅ Checkbox do filtrowania „Grupy Magdalenki”
+    # ✅ Checkbox „Grupy Magdalenki” – DZIAŁA TYLKO NA GŁÓWNY PLAN
     filter_magdalenki = st.checkbox("**:red[Grupy Magdalenki]**", value=False)
 
-    # Skala pionowa (bez suwaka)
-    PX_PER_MIN = HOUR_HEIGHT_PX / 60.0
-
-    # Zakładki dni (Pon–Pt)
-    days_of_week_pl = ["Pon", "Wt", "Śr", "Czw", "Pt", "Sob", "Niedz"]
-    visible_offsets = [0, 1, 2, 3, 4]  # bez sob/ndz
-    day_tabs = st.columns(len(visible_offsets))
-    for i, off in enumerate(visible_offsets):
-        current_day_date = week_start + timedelta(days=off)
-        if day_tabs[i].button(f"{days_of_week_pl[off]} {current_day_date.day}", use_container_width=True):
-            st.session_state.selected_day_index = off
-            st.rerun()
-
-    # --- Filtrowanie wg „Grupy Magdalenki” (jak ustawiłeś: '11' dla num., 'd' dla liter) ---
-    df_src = df
+    # Przygotuj źródło danych:
+    # - df_main (ew. przefiltrowany checkboxem)
+    # - + df_pr (praktyki dla grupy 11) ZAWSZE dołączone
+    df_main_src = df_main
     if filter_magdalenki:
         def _is_whole_year(g: str) -> bool:
             s = (g or "").strip().lower()
@@ -322,14 +309,35 @@ try:
             if _is_whole_year(s):
                 return True
             if any(ch.isdigit() for ch in s):
+                # U Ciebie było 11 → zostawiam 11
                 return s == "11" or s.startswith("11")
+            # literowe: d
             return s == "d" or s.startswith("d")
 
-        df_src = df[df["group"].apply(_keep_row)]
+        df_main_src = df_main[df_main["group"].apply(_keep_row)]
 
-    # Dane dnia (po filtrze)
+    if not df_pr.empty:
+        df_all = pd.concat([df_main_src, df_pr], ignore_index=True, sort=False)
+        df_all.sort_values(by=['date', 'start_time_obj'], inplace=True)
+    else:
+        df_all = df_main_src
+
+    # Skala pionowa
+    PX_PER_MIN = HOUR_HEIGHT_PX / 60.0
+
+    # Zakładki dni (Pon–Pt)
+    days_of_week_pl = ["Pon", "Wt", "Śr", "Czw", "Pt", "Sob", "Niedz"]
+    visible_offsets = [0, 1, 2, 3, 4]
+    day_tabs = st.columns(len(visible_offsets))
+    for i, off in enumerate(visible_offsets):
+        current_day_date = week_start + timedelta(days=off)
+        if day_tabs[i].button(f"{days_of_week_pl[off]} {current_day_date.day}", use_container_width=True):
+            st.session_state.selected_day_index = off
+            st.rerun()
+
+    # Dane dnia
     selected_day_date = week_start + timedelta(days=st.session_state.selected_day_index)
-    day_events = df_src[df_src['date'].dt.date == selected_day_date]
+    day_events = df_all[df_all['date'].dt.date == selected_day_date]
     st.markdown(f"### {selected_day_date.strftime('%A, %d.%m.%Y')}")
 
     # ---- OŚ CZASU + PŁÓTNO KALENDARZA ----
@@ -362,7 +370,7 @@ try:
         ticks_html.append(f"<div class='tick' style='top:{top:.2f}px'></div>")
         ticks_html.append(f"<div class='tick-label' style='top:{top:.2f}px'>{h:02d}:00</div>")
 
-    # Eventy źródłowe
+    # Eventy do rysowania
     events = []
     for _, e in day_events.iterrows():
         if pd.isna(e['start_time_obj']) or pd.isna(e['end_time_obj']):
@@ -370,16 +378,16 @@ try:
         events.append({
             "start_min": to_minutes(e['start_time_obj']),
             "end_min": to_minutes(e['end_time_obj']),
-            "subject": e["subject"],
-            "instructor": e.get("instructor", ""),
-            "room": e.get("room", ""),
-            "group": e["group"],
-            "start_str": e["start_time"],
-            "end_str": e["end_time"]
+            "subject": e.get("subject",""),
+            "instructor": e.get("instructor",""),
+            "room": e.get("room",""),
+            "group": e.get("group",""),
+            "start_str": e.get("start_time",""),
+            "end_str": e.get("end_time",""),
         })
     events.sort(key=lambda x: (x["start_min"], x["end_min"]))
 
-    # Kolumny + klastry (równoległe obok siebie)
+    # Kolumny + klastry
     def assign_columns_and_clusters_local(evts):
         result = []
         active = []
