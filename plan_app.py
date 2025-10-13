@@ -88,14 +88,19 @@ def load_practicals_group11(file_path: str) -> pd.DataFrame:
     raw = pd.read_excel(file_path, sheet_name="grafik", header=None)
 
     # Znajdź wiersz grupy 11
-    grp_row_idx = None
-    for i, v in raw.iloc[:, 0].items():
-        if str(v).strip().isdigit() and int(v) == 11:
+    # --- POPRAWIONY KOD ---
+grp_row_idx = None
+for i, v in raw.iloc[:, 0].items():
+    if pd.isna(v):
+        continue
+    try:
+        # Konwersja na float, a potem int, obsłuży zarówno '11' jak i '11.0'
+        if int(float(str(v).strip())) == 11:
             grp_row_idx = i
             break
-    if grp_row_idx is None:
-        return pd.DataFrame(columns=["date","subject","instructor","room","group",
-                                     "start_time_obj","end_time_obj","start_time","end_time"])
+    except (ValueError, TypeError):
+        # Ignoruj komórki, których nie da się przekonwertować na liczbę
+        continue
 
     # Rok akademicki np. "2024/2025" w wierszu 1, kol 0
     header_text = str(raw.iat[1, 0]) if pd.notna(raw.iat[1, 0]) else ""
@@ -464,3 +469,4 @@ except FileNotFoundError:
     st.error("Nie znaleziono pliku `plan_zajec.xlsx`. Upewnij się, że plik znajduje się w repozytorium.")
 except Exception as e:
     st.error(f"Wystąpił nieoczekiwany błąd: {e}")
+
