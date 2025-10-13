@@ -63,7 +63,7 @@ def load_data(file_path: str) -> pd.DataFrame:
     return df
 
 # =========================
-# PARSER PRAKTYK — dopasowany do arkusza „grafik”
+# POMOCNICZE DO PRAKTYK
 # =========================
 def _first_existing(paths):
     for p in paths:
@@ -78,7 +78,7 @@ def _month_from_label(lbl: str):
     return PL.get(lbl.strip().upper())
 
 def _build_col_date_table(df: pd.DataFrame):
-    # wiersz 2 -> miesiąc, wiersz 4 -> dzień
+    """Mapuje kolumny -> daty na podstawie: wiersz 3 (miesiąc), wiersz 5 (dzień) i nagłówka z latami."""
     header_text = str(df.iat[1,0]) if df.shape[0] > 1 and pd.notna(df.iat[1,0]) else ""
     m = re.search(r'(20\d{2})/(20\d{2})', header_text)
     start_year, end_year = (int(m.group(1)), int(m.group(2))) if m else (datetime.now().year, datetime.now().year+1)
@@ -99,13 +99,12 @@ def _build_col_date_table(df: pd.DataFrame):
                 pass
     return col_date
 
-
-# ---------- solidne wykrycie wiersza '11' ----------
 def _find_group_row(df: pd.DataFrame, label='11'):
+    """Znajdź wiersz, którego pierwsza kolumna to '11' (obsługuje 11/11.0/'11')."""
     want = str(label)
     for i in range(df.shape[0]):
         v = df.iat[i, 0]
-        if pd.isna(v): 
+        if pd.isna(v):
             continue
         if isinstance(v, (int, float)) and float(v).is_integer():
             s = str(int(v))
@@ -117,9 +116,8 @@ def _find_group_row(df: pd.DataFrame, label='11'):
             return i
     return None
 
-# ---------- mapa kodów z legendy (wiersze 22..38) ----------
 def _build_code_info(df: pd.DataFrame):
-    import re
+    """Buduje mapę: kod -> {subject, ward, location, teacher, default_time} z legendy (wiersze 22..38)."""
     code_info = {}
     time_re = re.compile(r'(\d{1,2}:\d{2}).*?(\d{1,2}:\d{2})', re.I)
 
@@ -128,7 +126,6 @@ def _build_code_info(df: pd.DataFrame):
         return (' ul.' in s2) or ('szpital' in s2) or ('przychodnia' in s2) or (',' in s2 and len(s) > 10)
 
     def looks_teacher(s: str) -> bool:
-        # nazwiska: ma spację/myślnik i nie jest w całości caps
         return (len(s) > 8 and (' ' in s or '-' in s)) and not s.isupper()
 
     for r in range(21, min(40, df.shape[0])):  # 22..38 (0-index)
@@ -142,7 +139,6 @@ def _build_code_info(df: pd.DataFrame):
         if not cells:
             continue
 
-        # spróbuj kodu z kolumny 2 (najczęściej tam)
         raw_code = None
         if df.shape[1] > 1:
             v = df.iat[r, 1]
@@ -150,7 +146,6 @@ def _build_code_info(df: pd.DataFrame):
                 raw_code = str(int(v)) if float(v).is_integer() else str(v)
             elif isinstance(v, str):
                 raw_code = v.strip()
-        # jak brak – szukaj w całym wierszu
         if not raw_code:
             m = re.search(r'\b([A-Za-z]{1,4}\d{0,3}|\d{1,3})\b', ' '.join(cells))
             raw_code = m.group(1) if m else None
@@ -158,8 +153,6 @@ def _build_code_info(df: pd.DataFrame):
             continue
 
         code = raw_code.upper()
-
-        # subject = najdłuższy sensowny tekst
         subject = ''
         ward = ''
         location = ''
@@ -176,7 +169,6 @@ def _build_code_info(df: pd.DataFrame):
         if long_texts:
             subject = max(long_texts, key=len)
 
-        # ward (POZ/CSM/SOR/ZOL/…)
         wards = [s for s in cells if re.fullmatch(r'[A-Z]{2,4}', s)]
         if wards:
             for pref in ('POZ','CSM','SOR','ZOL','USK','UO'):
@@ -193,7 +185,6 @@ def _build_code_info(df: pd.DataFrame):
         if teachers:
             teacher = teachers[-1]
 
-        # specjalny alias: gdy ward+lokalizacja to CSM → do roomu
         code_info[code] = {
             'subject': subject or code,
             'ward': ward,
@@ -202,15 +193,15 @@ def _build_code_info(df: pd.DataFrame):
             'default_time': default_time
         }
 
-    # uzupełnienie domyślne
     code_info.setdefault('CSM', {'subject':'Centrum Symulacji Medycznych','ward':'CSM',
                                  'location':'','teacher':'','default_time':None})
     return code_info
 
-# ---------- parser praktyk gr. 11 ----------
+# =========================
+# PARSER PRAKTYK (grupa 11) – z tolerancyjnym parsowaniem godzin
+# =========================
 @st.cache_data(ttl=600)
 def load_practicals_group11(file_path: str) -> pd.DataFrame:
-    import re
     raw = pd.read_excel(file_path, sheet_name="grafik", header=None)
 
     # kolumna->data: miesiąc w wierszu 3 (idx 2), dzień w 5 (idx 4)
@@ -224,13 +215,24 @@ def load_practicals_group11(file_path: str) -> pd.DataFrame:
                                      "start_time_obj","end_time_obj","start_time","end_time"])
 
     code_info = _build_code_info(raw)
-    time_range_re = re.compile(r'(\d{1,2}:\d{2})\s*[-–]\s*(\d{1,2}:\d{2})')
+
+    # akceptuj "7:30-17:15", "07:30–17:15", "7.30-17.15"
+    time_range_re = re.compile(r'(\d{1,2}[:.]\d{2})\s*[-–]\s*(\d{1,2}[:.]\d{2})')
+
+    def _parse_hhmm_forgiving(s: str):
+        s = str(s).strip()
+        m = re.match(r'^(\d{1,2})[:.](\d{2})$', s)
+        if not m:
+            return None
+        h, mi = int(m.group(1)), int(m.group(2))
+        if 0 <= h <= 23 and 0 <= mi <= 59:
+            return dtime(h, mi)
+        return None
 
     def add_row(out, the_date, subject, teacher, room, s, e):
-        try:
-            stime = pd.to_datetime(s, format="%H:%M").time()
-            etime = pd.to_datetime(e, format="%H:%M").time()
-        except Exception:
+        stime = _parse_hhmm_forgiving(s)
+        etime = _parse_hhmm_forgiving(e)
+        if not stime or not etime:
             return
         out.append({
             "date": pd.to_datetime(the_date),
@@ -249,6 +251,7 @@ def load_practicals_group11(file_path: str) -> pd.DataFrame:
         cell = raw.iat[grp_row, c]
         if pd.isna(cell):
             continue
+        # obsłuż wielokrotne wpisy w jednej komórce (oddzielone ; lub nową linią)
         pieces = re.split(r'[;\n]+', str(cell))
         for piece in (p.strip() for p in pieces if p and p.strip()):
             times = time_range_re.findall(piece)
@@ -279,10 +282,8 @@ def load_practicals_group11(file_path: str) -> pd.DataFrame:
         out.reset_index(drop=True, inplace=True)
     return out
 
-
-
 # =========================
-# STYLE (jak wcześniej)
+# STYLE
 # =========================
 st.markdown("""
 <style>
@@ -333,7 +334,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # =========================
-# KALENDARZ / UI (bez zmian poza scalamy df_main + df_pr)
+# KALENDARZ / UI
 # =========================
 def to_minutes(t: dtime) -> int:
     return t.hour * 60 + t.minute
@@ -421,9 +422,9 @@ try:
         def _keep_row(grp: str) -> bool:
             s = (grp or "").strip().lower()
             if _is_whole_year(s): return True
-            if any(ch.isdigit() for ch in s):  # numeryczne → grupa 11
+            if any(ch.isdigit() for ch in s):      # numeryczne → tylko '11'
                 return s == "11" or s.startswith("11")
-            return s == "d" or s.startswith("d")  # literowe → tylko 'd'
+            return s == "d" or s.startswith("d")   # literowe → tylko 'd'
 
         df_main_src = df_main[df_main["group"].apply(_keep_row)]
 
@@ -454,7 +455,6 @@ try:
     st.markdown(f"### {selected_day_date.strftime('%A, %d.%m.%Y')}")
 
     # ---- OŚ CZASU + PŁÓTNO KALENDARZA ----
-    def to_minutes(t: dtime) -> int: return t.hour * 60 + t.minute
     base_start, base_end = dtime(7, 0), dtime(21, 0)
     base_start_m, base_end_m = to_minutes(base_start), to_minutes(base_end)
 
@@ -576,5 +576,3 @@ except FileNotFoundError:
     st.error("Nie znaleziono pliku `plan_zajec.xlsx` lub arkusza praktyk.")
 except Exception as e:
     st.error(f"Wystąpił nieoczekiwany błąd: {e}")
-
-
