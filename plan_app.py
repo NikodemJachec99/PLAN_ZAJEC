@@ -20,7 +20,7 @@ PRACTICAL_CANDIDATES = [
     "praktyki.xlsx",
 ]
 
-# --- STRONA ---
+# --- USTAWIENIA STRONY ---
 st.set_page_config(page_title="Plan Zajęć ❤️", page_icon="📅", layout="centered")
 
 # --- AUTO-ODŚWIEŻANIE (60 s) ---
@@ -31,7 +31,7 @@ except Exception:
     st.markdown("<script>setTimeout(()=>window.location.reload(), 60000);</script>", unsafe_allow_html=True)
 
 # =========================
-# PARSERY
+# PARSER GŁÓWNEGO PLANU (bez zmian)
 # =========================
 @st.cache_data(ttl=600)
 def load_data(file_path: str) -> pd.DataFrame:
@@ -62,171 +62,183 @@ def load_data(file_path: str) -> pd.DataFrame:
     df.sort_values(by=['date', 'start_time_obj'], inplace=True)
     return df
 
-def _norm(s: str) -> str:
-    return (s.replace('Ą','A').replace('Ć','C').replace('Ę','E').replace('Ł','L')
-             .replace('Ń','N').replace('Ó','O').replace('Ś','S').replace('Ż','Z').replace('Ź','Z'))
-
-MONTHS_PL = {
-    'STYCZEN':1, 'LUTY':2, 'MARZEC':3, 'KWIECIEN':4, 'MAJ':5, 'CZERWIEC':6,
-    'LIPIEC':7, 'SIERPIEN':8, 'WRZESIEN':9, 'PAZDZIERNIK':10, 'LISTOPAD':11, 'GRUDZIEN':12
-}
-
-def _month_from_label(lbl):
-    if not isinstance(lbl, str): return None
-    return MONTHS_PL.get(_norm(lbl.strip().upper()))
-
+# =========================
+# PARSER PRAKTYK — dopasowany do arkusza „grafik”
+# =========================
 def _first_existing(paths):
     for p in paths:
         if os.path.exists(p):
             return p
     return None
 
-@st.cache_data(ttl=600)
-def load_practicals_group11_precise(file_path: str) -> pd.DataFrame:
-    """
-    Parser praktyk *konkretnej* struktury, zgodnie z Twoim opisem:
-    - Wiersz 2: miesiące (napisy)
-    - Wiersz 4: dni miesiąca (liczby)
-    - Wiersz 16: ZAWSZE dane grupy 11 (fallback: znajdź '11' w kol. 0)
-    - Wiersze 21..39: słownik KOD -> OPIS zajęć
-    - Komórki grupy 11 mogą mieć kilka zakresów czasu (np. 'CSM7 8:00-11:45; UP 12:00-14:00')
-    """
-    raw = pd.read_excel(file_path, sheet_name="grafik", header=None)
+def _month_from_label(lbl: str):
+    PL = {'STYCZEŃ':1,'LUTY':2,'MARZEC':3,'KWIECIEŃ':4,'MAJ':5,'CZERWIEC':6,
+          'LIPIEC':7,'SIERPIEŃ':8,'WRZESIEŃ':9,'PAŹDZIERNIK':10,'LISTOPAD':11,'GRUDZIEŃ':12}
+    if not isinstance(lbl, str): return None
+    return PL.get(lbl.strip().upper())
 
-    rows, cols = raw.shape
+def _build_col_date_table(df: pd.DataFrame):
+    # wiersz 2 -> miesiąc, wiersz 4 -> dzień
+    header_text = str(df.iat[1,0]) if df.shape[0] > 1 and pd.notna(df.iat[1,0]) else ""
+    m = re.search(r'(20\d{2})/(20\d{2})', header_text)
+    start_year, end_year = (int(m.group(1)), int(m.group(2))) if m else (datetime.now().year, datetime.now().year+1)
 
-    # --- 1) MAPA KOD -> OPIS z wierszy 21..39 ---
-    code_map = {}
-    for r in range(21, min(40, rows)):  # 21..39
-        # sprawdź kilka pierwszych kolumn, bo bywa różnie rozmieszczone
-        for c in range(0, min(6, cols)):
-            cell = raw.iat[r, c]
-            if isinstance(cell, str) and cell.strip():
-                s = " ".join(cell.split())
-                # Spróbuj "KOD - opis", "KOD opis", "KOD: opis"
-                # Znormalizuj do porównań, ale zachowaj oryginał do opisu
-                s_norm = _norm(s).strip()
-                m = re.match(r'^([A-Za-z0-9]{2,10})\s*[-–:]*\s*(.+)$', s_norm)
-                if m:
-                    code = m.group(1).upper()
-                    desc = m.group(2).strip()
-                    if code and code not in code_map:
-                        code_map[code] = desc
-                else:
-                    # e.g. "CSM7" samo w komórce, opis może być w sąsiedniej kolumnie
-                    m2 = re.match(r'^([A-Za-z0-9]{2,10})$', s_norm)
-                    if m2:
-                        code = m2.group(1).upper()
-                        # poszukaj opisu obok
-                        neigh = None
-                        for cc in range(c+1, min(c+3, cols)):
-                            cell2 = raw.iat[r, cc]
-                            if isinstance(cell2, str) and cell2.strip():
-                                neigh = " ".join(cell2.split())
-                                break
-                        if code and neigh and code not in code_map:
-                            code_map[code] = _norm(neigh).strip()
-    # --- 2) KOLUMNA -> DATA (miesiąc w wierszu 2, dzień w 4) ---
+    current_month = None
     col_date = {}
-    current_month_num = None
-    for c in range(1, cols):
-        mcell = raw.iat[2, c] if 2 < rows else None
-        if isinstance(mcell, str) and mcell.strip():
-            mm = _month_from_label(mcell)
-            if mm:
-                current_month_num = mm
-        d = raw.iat[4, c] if 4 < rows else None
-        if pd.notna(d) and current_month_num is not None:
+    for c in range(1, df.shape[1]):
+        mcell = df.iat[2, c] if df.shape[0] > 2 else None
+        mm = _month_from_label(mcell)
+        if mm: current_month = mm
+        d = df.iat[4, c] if df.shape[0] > 4 else None
+        if pd.notna(d) and current_month is not None:
             try:
-                day = int(str(d).strip())
-                # rok: jesień (>=10) to pierwszy rok, <10 to drugi
-                # Spróbuj znaleźć "YYYY/YYYY" w okolicy A2/A1; jak nie ma, załóż bieżący +/-
-                header_text = str(raw.iat[1, 0]) if (rows > 1 and pd.notna(raw.iat[1, 0])) else ""
-                mm = re.search(r'(20\d{2})/(20\d{2})', header_text)
-                if mm:
-                    start_year, end_year = int(mm.group(1)), int(mm.group(2))
-                else:
-                    # fallback: prosta heurystyka roku akademickiego
-                    today = datetime.now().date()
-                    start_year = today.year if today.month >= 10 else today.year - 1
-                    end_year = start_year + 1
-                year = start_year if current_month_num >= 10 else end_year
-                col_date[c] = pd.to_datetime(f"{year}-{current_month_num:02d}-{day:02d}").date()
+                day = int(float(d))
+                year = start_year if current_month >= 10 else end_year
+                col_date[c] = pd.to_datetime(f"{year}-{current_month:02d}-{day:02d}").date()
             except Exception:
                 pass
+    return col_date
 
-    # --- 3) WIERSZ GRUPY 11: zawsze 16 (0-based = 16), ale zróbmy fallback ---
-    grp_row_idx = 16 if rows > 16 else None
-    if grp_row_idx is None or not str(raw.iat[grp_row_idx, 0]).strip():
-        # fallback: szukaj '11' w pierwszej kolumnie
-        for i, v in raw.iloc[:, 0].items():
-            if str(v).strip().isdigit() and int(v) == 11:
-                grp_row_idx = i
-                break
-    if grp_row_idx is None:
+def _find_group_row(df: pd.DataFrame, label='11'):
+    for i in range(df.shape[0]):
+        v = df.iat[i, 0]
+        if str(v).strip() == str(label):
+            return i
+    return None
+
+def _build_code_and_time_maps(df: pd.DataFrame):
+    """
+    Wiersze 21..38:
+      - kol. 1 = KOD (np. C, 47, 116, Opt, 22, 12, 13, St, Kup, N, UP, EL, MG)
+      - kol. 3 = Nazwa przedmiotu
+      - gdziekolwiek w wierszu może wystąpić 'godz. X:YY-Z:TT' -> domyślna ramka godzin dla KODu
+    """
+    code_map = {}
+    time_map = {}
+    for r in range(21, min(40, df.shape[0])):
+        code = df.iat[r, 1] if df.shape[1] > 1 else None
+        subj = df.iat[r, 3] if df.shape[1] > 3 else None
+
+        if isinstance(code, float) and code.is_integer():
+            code = str(int(code))
+        elif code is not None:
+            code = str(code).strip()
+
+        # domyślne godziny
+        ttxt = None
+        for c in range(df.shape[1]):
+            v = df.iat[r, c]
+            if isinstance(v, str) and 'godz' in v.lower():
+                ttxt = v; break
+        if ttxt:
+            m = re.search(r'(\d{1,2}:\d{2}).*?(\d{1,2}:\d{2})', ttxt)
+            if m and code:
+                time_map[code.upper()] = (m.group(1), m.group(2))
+
+        if code and isinstance(subj, str) and subj.strip():
+            code_map[code.upper()] = subj.strip()
+
+        # dodatkowo — CSM (z lewej “ZP CSM”) → ogólny opis
+        left = df.iat[r, 0] if df.shape[1] > 0 else None
+        if isinstance(left, str) and 'CSM' in left:
+            code_map.setdefault('CSM', 'Centrum Symulacji Medycznych')
+
+    return code_map, time_map
+
+@st.cache_data(ttl=600)
+def load_practicals_group11(file_path: str) -> pd.DataFrame:
+    raw = pd.read_excel(file_path, sheet_name="grafik", header=None)
+    col_date = _build_col_date_table(raw)
+    grp_row = _find_group_row(raw, '11')
+    if grp_row is None:
         return pd.DataFrame(columns=["date","subject","instructor","room","group",
                                      "start_time_obj","end_time_obj","start_time","end_time"])
 
-    # --- 4) CZYTANIE KOMÓREK W WIERSZU GRUPY 11 ---
-    time_re = re.compile(r'(\d{1,2}:\d{2})\s*[-–]\s*(\d{1,2}:\d{2})')
-    code_re = re.compile(r'\b([A-Za-z]{2,}[0-9]{0,3})\b')  # np. CSM7, UP, itp.
-    rows_out = []
+    code_map, time_map = _build_code_and_time_maps(raw)
 
-    row = raw.iloc[grp_row_idx, :]
+    # regexy
+    time_range_re = re.compile(r'(\d{1,2}:\d{2})\s*[-–]\s*(\d{1,2}:\d{2})')
+
+    def subject_for_code(code: str):
+        if not code: return None
+        up = code.upper()
+        if up.startswith('CSM'):
+            return 'Centrum Symulacji Medycznych'
+        if up.startswith('OOO'):
+            return 'Opieka długoterminowa / OOO'
+        return code_map.get(up)
+
+    def times_for_code(code: str):
+        if not code: return None
+        up = code.upper()
+        return time_map.get(up)
+
+    def extract_code(piece_core: str):
+        tokens = re.findall(r'[A-Za-z]{2,}\d{0,2}|[A-Za-z]{1,3}|[0-9]{1,3}', piece_core)
+        for t in [t.upper() for t in tokens]:
+            if t.startswith('CSM') or t.startswith('OOO'):
+                return t
+            if t in code_map or t in time_map:
+                return t
+        for t in [t.upper() for t in tokens]:
+            if re.fullmatch(r'\d{1,3}', t):
+                return t
+        for t in [t.upper() for t in tokens]:
+            if re.fullmatch(r'[A-Z]{2,3}', t):
+                return t
+        return None
+
+    def extract_teacher(piece_core: str):
+        m = re.search(r'([A-ZĄĆĘŁŃÓŚŻŹ]{1,3}(?:-[A-Z]{1,2})?)\s*$', piece_core.strip())
+        if m:
+            t = m.group(1)
+            if t in {'UP','EL','MG','CSM'}:  # nie myl kodów z inicjałami
+                return None
+            return t
+        return None
+
+    rows_out = []
     for c, the_date in col_date.items():
-        cell = row.iloc[c]
+        cell = raw.iat[grp_row, c]
         if pd.isna(cell):
             continue
-
-        # rozbij na segmenty: ';' lub nowa linia
+        # rozbij na elementy (np. "OOO8 8:00-11:45; UP 12:00-14:00")
         pieces = re.split(r'[;\n]+', str(cell))
-        for piece in pieces:
-            s = " ".join(str(piece).split())
-            if not s:
-                continue
+        for piece in [p.strip() for p in pieces if p and p.strip()]:
+            ranges = time_range_re.findall(piece)
+            piece_nogod = re.sub(r'(?i)godz\.\s*', '', piece)
+            piece_core = time_range_re.sub('', piece_nogod).strip(" -–•.,;")
+            code = extract_code(piece_core)
+            teacher = extract_teacher(piece_core)
+            subj = subject_for_code(code) or (piece_core.split()[0] if piece_core else "Zajęcia praktyczne")
+            room = code or ""
 
-            # znajdź wszystkie przedziały czasu w segmencie
-            times = list(time_re.finditer(s))
-            if not times:
-                continue
-
-            # przygotuj label: usuń "godz." i zakresy godzin, zbierz kod (do mapy)
-            s_clean = re.sub(r'(?i)godz\.\s*', '', s)
-            for m in times:
-                s_clean = s_clean.replace(m.group(0), "")
-            s_clean = s_clean.strip(" -–•.,;")
-
-            # wyłuskaj kod (jeśli jest)
-            code_match = code_re.search(s_clean.upper())
-            code = code_match.group(1).upper() if code_match else None
-
-            # docelowy subject: opis z mapy, albo „Praktyki [kod]”, albo czyszczony tekst
-            if code and code in code_map:
-                subject_label = code_map[code]
-            elif code:
-                subject_label = f"Praktyki {code}"
+            if ranges:
+                for s, e in ranges:
+                    try:
+                        stime = pd.to_datetime(s, format="%H:%M").time()
+                        etime = pd.to_datetime(e, format="%H:%M").time()
+                    except Exception:
+                        continue
+                    rows_out.append({
+                        "date": pd.to_datetime(the_date),
+                        "subject": subj, "instructor": teacher or "", "room": room, "group": "11",
+                        "start_time_obj": stime, "end_time_obj": etime,
+                        "start_time": stime.strftime("%H:%M"), "end_time": etime.strftime("%H:%M"),
+                    })
             else:
-                subject_label = s_clean if s_clean else "Zajęcia praktyczne"
-
-            # wygeneruj event dla każdego zakresu czasu
-            for m in times:
-                start_str, end_str = m.group(1), m.group(2)
+                # brak godzin → domyślne z legendy, a jak nie ma, to 07:30–15:00
+                tr = times_for_code(code) or ('07:30', '15:00')
                 try:
-                    stime = pd.to_datetime(start_str, format="%H:%M").time()
-                    etime = pd.to_datetime(end_str,   format="%H:%M").time()
+                    stime = pd.to_datetime(tr[0], format="%H:%M").time()
+                    etime = pd.to_datetime(tr[1], format="%H:%M").time()
                 except Exception:
                     continue
-
                 rows_out.append({
                     "date": pd.to_datetime(the_date),
-                    "subject": subject_label,
-                    "instructor": "",
-                    "room": "",
-                    "group": "11",
-                    "start_time_obj": stime,
-                    "end_time_obj": etime,
-                    "start_time": stime.strftime("%H:%M"),
-                    "end_time": etime.strftime("%H:%M"),
+                    "subject": subj, "instructor": teacher or "", "room": room, "group": "11",
+                    "start_time_obj": stime, "end_time_obj": etime,
+                    "start_time": stime.strftime("%H:%M"), "end_time": etime.strftime("%H:%M"),
                 })
 
     out = pd.DataFrame(rows_out)
@@ -236,7 +248,7 @@ def load_practicals_group11_precise(file_path: str) -> pd.DataFrame:
     return out
 
 # =========================
-# STYLE (jak było)
+# STYLE (jak wcześniej)
 # =========================
 st.markdown("""
 <style>
@@ -287,32 +299,26 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # =========================
-# RYSOWANIE / LOGIKA UI (bez zmian funkcjonalnych poza scalamy df_main + df_pr)
+# KALENDARZ / UI (bez zmian poza scalamy df_main + df_pr)
 # =========================
 def to_minutes(t: dtime) -> int:
     return t.hour * 60 + t.minute
 
 def assign_columns_and_clusters(evts):
-    result = []
-    active = []
-    free_cols = []
-    next_col = 0
+    result = []; active = []; free_cols = []; next_col = 0
     clusters, current_cluster = [], []
     for idx, ev in enumerate(evts):
         while active and active[0][0] <= ev["start_min"]:
             _, col_finished, _ = heapq.heappop(active)
-            free_cols.append(col_finished)
-            free_cols.sort()
+            free_cols.append(col_finished); free_cols.sort()
         if not active and current_cluster:
-            clusters.append(current_cluster)
-            current_cluster = []
+            clusters.append(current_cluster); current_cluster = []
         col = free_cols.pop(0) if free_cols else next_col
         if col == next_col: next_col += 1
         heapq.heappush(active, (ev["end_min"], col, idx))
         result.append({**ev, "col": col, "cluster_id": -1})
         current_cluster.append((idx, ev["start_min"], ev["end_min"], col))
-    if current_cluster:
-        clusters.append(current_cluster)
+    if current_cluster: clusters.append(current_cluster)
     cluster_cols = {}
     for c_id, items in enumerate(clusters):
         points = []
@@ -336,7 +342,7 @@ try:
     prat_file = _first_existing(PRACTICAL_CANDIDATES)
     if prat_file:
         try:
-            df_pr = load_practicals_group11_precise(prat_file)
+            df_pr = load_practicals_group11(prat_file)
         except Exception:
             df_pr = pd.DataFrame()
 
@@ -372,7 +378,6 @@ try:
     # ✅ Checkbox „Grupy Magdalenki” – działa WYŁĄCZNIE na df_main
     filter_magdalenki = st.checkbox("**:red[Grupy Magdalenki]**", value=False)
 
-    # Zastosuj filtr tylko do df_main
     df_main_src = df_main
     if filter_magdalenki:
         def _is_whole_year(g: str) -> bool:
@@ -381,15 +386,14 @@ try:
 
         def _keep_row(grp: str) -> bool:
             s = (grp or "").strip().lower()
-            if _is_whole_year(s):
-                return True
-            if any(ch.isdigit() for ch in s):
+            if _is_whole_year(s): return True
+            if any(ch.isdigit() for ch in s):  # numeryczne → grupa 11
                 return s == "11" or s.startswith("11")
-            return s == "d" or s.startswith("d")
+            return s == "d" or s.startswith("d")  # literowe → tylko 'd'
 
         df_main_src = df_main[df_main["group"].apply(_keep_row)]
 
-    # Doklej praktyki (zawsze gr. 11)
+    # Doklej praktyki (grupa 11) niezależnie od filtra
     if not df_pr.empty:
         df_all = pd.concat([df_main_src, df_pr], ignore_index=True, sort=False)
     else:
@@ -416,6 +420,7 @@ try:
     st.markdown(f"### {selected_day_date.strftime('%A, %d.%m.%Y')}")
 
     # ---- OŚ CZASU + PŁÓTNO KALENDARZA ----
+    def to_minutes(t: dtime) -> int: return t.hour * 60 + t.minute
     base_start, base_end = dtime(7, 0), dtime(21, 0)
     base_start_m, base_end_m = to_minutes(base_start), to_minutes(base_end)
 
@@ -464,10 +469,7 @@ try:
 
     # Kolumny + klastry
     def assign_columns_and_clusters_local(evts):
-        result = []
-        active = []
-        free_cols = []
-        next_col = 0
+        result = []; active = []; free_cols = []; next_col = 0
         clusters, current_cluster = [], []
         for idx, ev in enumerate(evts):
             while active and active[0][0] <= ev["start_min"]:
@@ -498,18 +500,19 @@ try:
     positioned, cluster_cols = assign_columns_and_clusters_local(events)
 
     # Render eventów
+    PX = PX_PER_MIN
     events_html_parts = []
     for ev in positioned:
         total_cols = max(1, cluster_cols.get(ev["cluster_id"], 1))
         width_pct = 100 / total_cols
         left_pct = ev["col"] * width_pct
-        top = (ev["start_min"] - start_m) * PX_PER_MIN
-        height = max(34, (ev["end_min"] - ev["start_min"]) * PX_PER_MIN)
+        top = (ev["start_min"] - start_m) * PX
+        height = max(34, (ev["end_min"] - ev["start_min"]) * PX)
         part = (
             f"<div class='event' style='top:{top:.2f}px;height:{height:.2f}px;"
             f"left:calc({left_pct}% + 2px);width:calc({width_pct}% - 6px);'>"
             f"<div class='title'>{ev['subject']}</div>"
-            f"<div class='meta'>{ev['start_str']}–{ev['end_str']} • Sala {ev['room']} • Gr {ev['group']}<br>{ev['instructor']}</div>"
+            f"<div class='meta'>{ev['start_str']}–{ev['end_str']} • Sala/Oddz: {ev['room']} • Gr {ev['group']}<br>{ev['instructor']}</div>"
             f"</div>"
         )
         events_html_parts.append(part)
@@ -536,6 +539,6 @@ try:
     st.markdown(day_layout_html, unsafe_allow_html=True)
 
 except FileNotFoundError:
-    st.error("Nie znaleziono pliku `plan_zajec.xlsx`. Upewnij się, że plik znajduje się w repozytorium.")
+    st.error("Nie znaleziono pliku `plan_zajec.xlsx` lub arkusza praktyk.")
 except Exception as e:
     st.error(f"Wystąpił nieoczekiwany błąd: {e}")
