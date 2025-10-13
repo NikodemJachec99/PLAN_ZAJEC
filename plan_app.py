@@ -99,153 +99,220 @@ def _build_col_date_table(df: pd.DataFrame):
                 pass
     return col_date
 
+
+# ---------- PODMIANA: solidne wykrycie wiersza '11' ----------
 def _find_group_row(df: pd.DataFrame, label='11'):
+    want = str(label)
     for i in range(df.shape[0]):
         v = df.iat[i, 0]
-        if str(v).strip() == str(label):
+        if pd.isna(v):
+            continue
+        # 11, 11.0, "11", "11 " -> "11"
+        if isinstance(v, (int, float)) and float(v).is_integer():
+            s = str(int(v))
+        else:
+            s = str(v).strip()
+            if s.endswith('.0') and s[:-2].isdigit():
+                s = s[:-2]
+        if s == want:
             return i
-    return None
+    return None  # jakby co mam jeszcze fallback w load_practicals_group11
 
-def _build_code_and_time_maps(df: pd.DataFrame):
+# ---------- PODMIANA: budowa mapy kodów z legendy ----------
+def _build_code_info(df: pd.DataFrame):
     """
-    Wiersze 21..38:
-      - kol. 1 = KOD (np. C, 47, 116, Opt, 22, 12, 13, St, Kup, N, UP, EL, MG)
-      - kol. 3 = Nazwa przedmiotu
-      - gdziekolwiek w wierszu może wystąpić 'godz. X:YY-Z:TT' -> domyślna ramka godzin dla KODu
+    Wiersze 21..39: kolumny zawierają:
+      - kod (np. 'C', 'OOO8', 'UP', 'CSM7', '47', '116'…),
+      - nazwę przedmiotu (dłuższy tekst),
+      - ward / skrót oddziału (np. 'POZ', 'CSM', 'SOR'…),
+      - lokalizację (np. zawiera 'ul.' lub przecinek),
+      - prowadzącego (ostatni tekst zawierający spację / myślnik),
+      - czas domyślny z napisu typu 'godz. 7:30-15:00' (jeśli występuje).
+    Zwraca: dict[CODE] = {subject, ward, location, teacher, default_time=(hh:mm, hh:mm)}
     """
-    code_map = {}
-    time_map = {}
-    for r in range(21, min(40, df.shape[0])):
-        code = df.iat[r, 1] if df.shape[1] > 1 else None
-        subj = df.iat[r, 3] if df.shape[1] > 3 else None
+    code_info = {}
+    time_re = re.compile(r'(\d{1,2}:\d{2}).*?(\d{1,2}:\d{2})', re.I)
 
-        if isinstance(code, float) and code.is_integer():
-            code = str(int(code))
-        elif code is not None:
-            code = str(code).strip()
+    def pick_code(tokens):
+        # preferuj znane wzorce: CSM*, OOO*, UP, EL/MG, krótkie litery, czysta cyfra itp.
+        for t in tokens:
+            up = t.upper()
+            if up.startswith('CSM') or up.startswith('OOO'):
+                return up
+        for t in tokens:
+            up = t.upper()
+            if up in {'UP','EL','MG','ST','KUP','N'}:
+                return up
+        for t in tokens:
+            up = t.upper()
+            if re.fullmatch(r'[A-Z]{1,3}\d{0,3}', up):  # obejmuje 'C', 'OOO8', 'CSM7'
+                return up
+        for t in tokens:
+            up = t.upper()
+            if re.fullmatch(r'\d{1,3}', up):           # czysto numeryczne kody (47/116…)
+                return up
+        return None
 
-        # domyślne godziny
-        ttxt = None
+    def looks_location(s: str) -> bool:
+        s2 = s.lower()
+        return (' ul.' in s2) or (',' in s2 and len(s) > 10)
+
+    def looks_teacher(s: str) -> bool:
+        # najczęściej "Imię Nazwisko" albo z myślnikiem, unikaj krótkich skrótów
+        return (len(s) > 8 and (' ' in s or '-' in s)) and not s.isupper()
+
+    for r in range(21, min(40, df.shape[0])):  # 21..39
+        cells = []
         for c in range(df.shape[1]):
             v = df.iat[r, c]
-            if isinstance(v, str) and 'godz' in v.lower():
-                ttxt = v; break
-        if ttxt:
-            m = re.search(r'(\d{1,2}:\d{2}).*?(\d{1,2}:\d{2})', ttxt)
-            if m and code:
-                time_map[code.upper()] = (m.group(1), m.group(2))
+            if isinstance(v, str) and v.strip():
+                cells.append(v.strip())
+            elif isinstance(v, (int, float)) and not pd.isna(v):
+                # liczby typu 80 → olewamy do subjectu, ale przyda się jako 'liczba godzin' – niepotrzebne teraz
+                cells.append(str(int(v)) if float(v).is_integer() else str(v))
 
-        if code and isinstance(subj, str) and subj.strip():
-            code_map[code.upper()] = subj.strip()
+        if not cells:
+            continue
 
-        # dodatkowo — CSM (z lewej “ZP CSM”) → ogólny opis
-        left = df.iat[r, 0] if df.shape[1] > 0 else None
-        if isinstance(left, str) and 'CSM' in left:
-            code_map.setdefault('CSM', 'Centrum Symulacji Medycznych')
+        # zbierz potencjalne tokeny
+        tokens = re.findall(r'[A-Za-z]{1,4}\d{0,3}|\d{1,3}', ' '.join(cells))
+        code = pick_code(tokens)
+        if not code:
+            continue
 
-    return code_map, time_map
+        # subject = najdłuższy "ludzki" tekst
+        subject = ''
+        ward = ''
+        location = ''
+        teacher = ''
+        default_time = None
 
+        # czas domyślny z któregokolwiek pola w wierszu
+        for s in cells:
+            m = re.search(r'godz\.\s*(\d{1,2}:\d{2}).*?(\d{1,2}:\d{2})', s, re.I)
+            if m:
+                default_time = (m.group(1), m.group(2))
+                break
+
+        # heurystyki pól
+        long_texts = [s for s in cells if len(s) > 12 and not re.search(r'godz\.', s, re.I)]
+        if long_texts:
+            subject = max(long_texts, key=len)
+
+        # ward – krótkie wielkie litery typu POZ/CSM/SOR…
+        wards = [s for s in cells if re.fullmatch(r'[A-Z]{2,4}', s)]
+        if wards:
+            # preferuj POZ/CSM jeśli występują
+            for pref in ('POZ','CSM','SOR'):
+                if pref in wards: ward = pref; break
+            if not ward:
+                ward = wards[0]
+
+        # lokalizacja – tekst z 'ul.' lub dłuższy z przecinkiem
+        locs = [s for s in cells if looks_location(s)]
+        if locs:
+            location = max(locs, key=len)
+
+        # prowadzący – ostatni sensowny "imię nazwisko"
+        candidates = [s for s in cells if looks_teacher(s)]
+        if candidates:
+            teacher = candidates[-1]
+
+        code_info[code.upper()] = {
+            'subject': subject or code,
+            'ward': ward,
+            'location': location,
+            'teacher': teacher,
+            'default_time': default_time
+        }
+
+    # drobne uzupełnienia
+    code_info.setdefault('CSM', {'subject':'Centrum Symulacji Medycznych','ward':'CSM','location':'','teacher':'','default_time':None})
+    return code_info
+
+# ---------- PODMIANA: parser praktyk gr. 11 ----------
 @st.cache_data(ttl=600)
 def load_practicals_group11(file_path: str) -> pd.DataFrame:
     raw = pd.read_excel(file_path, sheet_name="grafik", header=None)
+
+    # mapowanie kolumn → daty (miesiąc w wierszu 2, dzień w 4)
     col_date = _build_col_date_table(raw)
+
+    # wiersz z "11" (działa dla 11 / 11.0 / "11"); fallback: 15 (Excel 16)
     grp_row = _find_group_row(raw, '11')
+    if grp_row is None:
+        grp_row = 15 if raw.shape[0] > 15 else None
     if grp_row is None:
         return pd.DataFrame(columns=["date","subject","instructor","room","group",
                                      "start_time_obj","end_time_obj","start_time","end_time"])
 
-    code_map, time_map = _build_code_and_time_maps(raw)
-
-    # regexy
+    code_info = _build_code_info(raw)
     time_range_re = re.compile(r'(\d{1,2}:\d{2})\s*[-–]\s*(\d{1,2}:\d{2})')
-
-    def subject_for_code(code: str):
-        if not code: return None
-        up = code.upper()
-        if up.startswith('CSM'):
-            return 'Centrum Symulacji Medycznych'
-        if up.startswith('OOO'):
-            return 'Opieka długoterminowa / OOO'
-        return code_map.get(up)
-
-    def times_for_code(code: str):
-        if not code: return None
-        up = code.upper()
-        return time_map.get(up)
-
-    def extract_code(piece_core: str):
-        tokens = re.findall(r'[A-Za-z]{2,}\d{0,2}|[A-Za-z]{1,3}|[0-9]{1,3}', piece_core)
-        for t in [t.upper() for t in tokens]:
-            if t.startswith('CSM') or t.startswith('OOO'):
-                return t
-            if t in code_map or t in time_map:
-                return t
-        for t in [t.upper() for t in tokens]:
-            if re.fullmatch(r'\d{1,3}', t):
-                return t
-        for t in [t.upper() for t in tokens]:
-            if re.fullmatch(r'[A-Z]{2,3}', t):
-                return t
-        return None
-
-    def extract_teacher(piece_core: str):
-        m = re.search(r'([A-ZĄĆĘŁŃÓŚŻŹ]{1,3}(?:-[A-Z]{1,2})?)\s*$', piece_core.strip())
-        if m:
-            t = m.group(1)
-            if t in {'UP','EL','MG','CSM'}:  # nie myl kodów z inicjałami
-                return None
-            return t
-        return None
 
     rows_out = []
     for c, the_date in col_date.items():
         cell = raw.iat[grp_row, c]
         if pd.isna(cell):
             continue
-        # rozbij na elementy (np. "OOO8 8:00-11:45; UP 12:00-14:00")
+
+        # np. "C          7:30-17:15" albo "OOO8 8:00-11:45; UP 12:00-14:00"
         pieces = re.split(r'[;\n]+', str(cell))
         for piece in [p.strip() for p in pieces if p and p.strip()]:
-            ranges = time_range_re.findall(piece)
-            piece_nogod = re.sub(r'(?i)godz\.\s*', '', piece)
-            piece_core = time_range_re.sub('', piece_nogod).strip(" -–•.,;")
-            code = extract_code(piece_core)
-            teacher = extract_teacher(piece_core)
-            subj = subject_for_code(code) or (piece_core.split()[0] if piece_core else "Zajęcia praktyczne")
-            room = code or ""
+            times = time_range_re.findall(piece)
+            core = time_range_re.sub('', piece)
+            core = re.sub(r'(?i)godz\.\s*', '', core).strip(" -–•.,;")
 
-            if ranges:
-                for s, e in ranges:
-                    try:
-                        stime = pd.to_datetime(s, format="%H:%M").time()
-                        etime = pd.to_datetime(e, format="%H:%M").time()
-                    except Exception:
-                        continue
-                    rows_out.append({
-                        "date": pd.to_datetime(the_date),
-                        "subject": subj, "instructor": teacher or "", "room": room, "group": "11",
-                        "start_time_obj": stime, "end_time_obj": etime,
-                        "start_time": stime.strftime("%H:%M"), "end_time": etime.strftime("%H:%M"),
-                    })
-            else:
-                # brak godzin → domyślne z legendy, a jak nie ma, to 07:30–15:00
-                tr = times_for_code(code) or ('07:30', '15:00')
+            # wybierz kod z core
+            tokens = re.findall(r'[A-Za-z]{1,4}\d{0,3}|\d{1,3}', core)
+            code = None
+            for t in tokens:
+                up = t.upper()
+                if up in code_info or up.startswith('CSM') or up.startswith('OOO') or up in {'UP','EL','MG'}:
+                    code = up; break
+            if not code and tokens:
+                code = tokens[0].upper()
+
+            # zmapuj szczegóły z legendy
+            meta = code_info.get(code, {})
+            subject = meta.get('subject') or (core if core else "Praktyki")
+            ward = meta.get('ward','')
+            location = meta.get('location','')
+            teacher = meta.get('teacher','')
+
+            room = " • ".join([x for x in [ward, location] if x]) or code or ""
+
+            def add_event(s, e):
                 try:
-                    stime = pd.to_datetime(tr[0], format="%H:%M").time()
-                    etime = pd.to_datetime(tr[1], format="%H:%M").time()
+                    stime = pd.to_datetime(s, format="%H:%M").time()
+                    etime = pd.to_datetime(e, format="%H:%M").time()
                 except Exception:
-                    continue
+                    return
                 rows_out.append({
                     "date": pd.to_datetime(the_date),
-                    "subject": subj, "instructor": teacher or "", "room": room, "group": "11",
-                    "start_time_obj": stime, "end_time_obj": etime,
-                    "start_time": stime.strftime("%H:%M"), "end_time": etime.strftime("%H:%M"),
+                    "subject": subject,
+                    "instructor": teacher,
+                    "room": room,
+                    "group": "11",
+                    "start_time_obj": stime,
+                    "end_time_obj": etime,
+                    "start_time": stime.strftime("%H:%M"),
+                    "end_time": etime.strftime("%H:%M"),
                 })
+
+            if times:
+                for s, e in times:
+                    add_event(s, e)
+            else:
+                # brak godzin → weź z legendy, a jak nie ma, to 07:30–15:00
+                default_time = meta.get('default_time') or ('07:30','15:00')
+                add_event(*default_time)
 
     out = pd.DataFrame(rows_out)
     if not out.empty:
         out.sort_values(by=["date", "start_time_obj"], inplace=True)
         out.reset_index(drop=True, inplace=True)
     return out
+
 
 # =========================
 # STYLE (jak wcześniej)
@@ -542,3 +609,4 @@ except FileNotFoundError:
     st.error("Nie znaleziono pliku `plan_zajec.xlsx` lub arkusza praktyk.")
 except Exception as e:
     st.error(f"Wystąpił nieoczekiwany błąd: {e}")
+
