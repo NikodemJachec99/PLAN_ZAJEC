@@ -74,33 +74,25 @@ def _month_from_label(lbl):
     return MONTHS_PL.get(_norm(lbl.strip().upper()))
 
 @st.cache_data(ttl=600)
+@st.cache_data(ttl=600)
 def load_practicals_group11(file_path: str) -> pd.DataFrame:
     """
-    Parser praktyk *konkretnej* struktury z arkusza 'grafik':
+    Parser praktyk dla grupy 11, zakładając, że dane znajdują się ZAWSZE w 16. wierszu.
     - Wiersz 0..1: nagłówki
     - Wiersz 2: w kolumnach nazwy miesięcy (np. 'PAŹDZIERNIK', 'LISTOPAD'...)
     - Wiersz 3: skrót dnia tygodnia (pn, wt, ...)
     - Wiersz 4: dzień miesiąca (liczby)
-    - Wiersze 5..16: numery grup (w kolumnie 0), nas interesuje wiersz z '11'
-    - W komórkach: kody + PRZEDZIAŁ CZASU, np. "CSM7    8:00-11:45", "UP 15:00-19:30"
+    - Wiersz 15 (16. wiersz w pliku): dane dla grupy 11
+    - W komórkach: kody + PRZEDZIAŁ CZASU, np. "CSM7   8:00-11:45", "UP 15:00-19:30"
     Zwracamy tylko wydarzenia dla grupy 11.
     """
     raw = pd.read_excel(file_path, sheet_name="grafik", header=None)
 
-    # Znajdź wiersz grupy 11
-    # --- POPRAWIONY KOD ---
-    grp_row_idx = None
-    for i, v in raw.iloc[:, 0].items():
-        if pd.isna(v):
-            continue
-        try:
-        # Konwersja na float, a potem int, obsłuży zarówno '11' jak i '11.0'
-            if int(float(str(v).strip())) == 11:
-                grp_row_idx = i
-                break
-        except (ValueError, TypeError):
-        # Ignoruj komórki, których nie da się przekonwertować na liczbę
-            continue
+    # Użyj na sztywno 16. wiersza (indeks 15) dla grupy 11
+    GRP_ROW_INDEX = 15
+    if GRP_ROW_INDEX >= len(raw):
+        st.warning("Plik z praktykami nie ma wystarczającej liczby wierszy (oczekiwano przynajmniej 16).")
+        return pd.DataFrame()
 
     # Rok akademicki np. "2024/2025" w wierszu 1, kol 0
     header_text = str(raw.iat[1, 0]) if pd.notna(raw.iat[1, 0]) else ""
@@ -122,20 +114,24 @@ def load_practicals_group11(file_path: str) -> pd.DataFrame:
                 year = start_year if current_month_num >= 10 else end_year
                 col_date[c] = pd.to_datetime(f"{year}-{current_month_num:02d}-{day:02d}").date()
             except Exception:
-                pass  # pomijamy bzdury
+                pass  # pomijamy błędy w datach
 
     # Ekstrakcja wydarzeń z wiersza grupy 11
     time_re = re.compile(r'(\d{1,2}:\d{2})\s*[-–]\s*(\d{1,2}:\d{2})')
     rows = []
-    row = raw.iloc[grp_row_idx, :]
+    # Pobierz dane bezpośrednio z 16. wiersza (indeks 15)
+    row_data = raw.iloc[GRP_ROW_INDEX]
+
     for c, dt_ in col_date.items():
-        cell = row.iloc[c]
-        if pd.isna(cell):
+        cell = row_data.iloc[c]
+        if pd.isna(cell) or str(cell).strip() == "":
             continue
+
         s = " ".join(str(cell).split())
         m = time_re.search(s)
         if not m:
             continue
+
         start_str, end_str = m.group(1), m.group(2)
 
         # etykieta bez "godz." i bez samego przedziału czasu
@@ -149,11 +145,11 @@ def load_practicals_group11(file_path: str) -> pd.DataFrame:
             continue
 
         rows.append({
-            "date": pd.to_datetime(dt_),            # pandas datetime64[D]
+            "date": pd.to_datetime(dt_),
             "subject": (label if label else "Zajęcia praktyczne"),
-            "instructor": "",
-            "room": "",
-            "group": "11",                          # zawsze 11
+            "instructor": "Praktyki", # Można wpisać stałą wartość
+            "room": "", # Informacja o sali jest w etykiecie
+            "group": "11",
             "start_time_obj": stime,
             "end_time_obj": etime,
             "start_time": stime.strftime("%H:%M"),
@@ -469,5 +465,6 @@ except FileNotFoundError:
     st.error("Nie znaleziono pliku `plan_zajec.xlsx`. Upewnij się, że plik znajduje się w repozytorium.")
 except Exception as e:
     st.error(f"Wystąpił nieoczekiwany błąd: {e}")
+
 
 
