@@ -1,18 +1,20 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime, timedelta, timezone, time as dtime
+from datetime import datetime, timedelta, timezone, time as dtime, date as ddate
 import math
 import heapq
 import re
 import os
+from typing import Optional, Dict, Tuple, List
 from zoneinfo import ZoneInfo
 
-# --- STAŁE DLA GĘSTOŚCI WIDOKU ---
+# =========================
+# STAŁE / KONFIG
+# =========================
 HOUR_HEIGHT_PX = 65         # 1h = 65px
 COMPACT_RANGE = True        # przycinaj widok do zakresu zajęć (+/- 15 min)
 TZ_WA = ZoneInfo("Europe/Warsaw")
 
-# --- NAZWY PLIKÓW ---
 MAIN_PLAN_FILE = "plan_zajec.xlsx"
 PRACTICAL_CANDIDATES = [
     "Pi_s_II_sem.-zimowy_26.09.2025 (1).xlsx",
@@ -20,7 +22,9 @@ PRACTICAL_CANDIDATES = [
     "praktyki.xlsx",
 ]
 
-# --- USTAWIENIA STRONY ---
+# =========================
+# USTAWIENIA STRONY
+# =========================
 st.set_page_config(page_title="Plan Zajęć ❤️", page_icon="📅", layout="centered")
 
 # --- AUTO-ODŚWIEŻANIE (60 s) ---
@@ -31,7 +35,28 @@ except Exception:
     st.markdown("<script>setTimeout(()=>window.location.reload(), 60000);</script>", unsafe_allow_html=True)
 
 # =========================
-# PARSER GŁÓWNEGO PLANU (bez zmian)
+# POMOCNICZE
+# =========================
+def _first_existing(paths):
+    for p in paths:
+        if os.path.exists(p):
+            return p
+    return None
+
+def to_minutes(t: dtime) -> int:
+    return t.hour * 60 + t.minute
+
+def _hex_to_rgb_tuple(hx: Optional[str]):
+    if not hx or not isinstance(hx, str) or not hx.startswith("#") or len(hx) != 7:
+        return None
+    try:
+        r = int(hx[1:3], 16); g = int(hx[3:5], 16); b = int(hx[5:7], 16)
+        return (r,g,b)
+    except Exception:
+        return None
+
+# =========================
+# PARSER GŁÓWNEGO PLANU
 # =========================
 @st.cache_data(ttl=600)
 def load_data(file_path: str) -> pd.DataFrame:
@@ -63,21 +88,15 @@ def load_data(file_path: str) -> pd.DataFrame:
     return df
 
 # =========================
-# POMOCNICZE DO PRAKTYK
+# PRAKTYKI — PARSER „STARY” (pandas), na wypadek braku arkusza 'grafik'
 # =========================
-def _first_existing(paths):
-    for p in paths:
-        if os.path.exists(p):
-            return p
-    return None
-
-def _month_from_label(lbl: str):
+def _month_from_label_old(lbl: str):
     PL = {'STYCZEŃ':1,'LUTY':2,'MARZEC':3,'KWIECIEŃ':4,'MAJ':5,'CZERWIEC':6,
           'LIPIEC':7,'SIERPIEŃ':8,'WRZESIEŃ':9,'PAŹDZIERNIK':10,'LISTOPAD':11,'GRUDZIEŃ':12}
     if not isinstance(lbl, str): return None
     return PL.get(lbl.strip().upper())
 
-def _build_col_date_table(df: pd.DataFrame):
+def _build_col_date_table_old(df: pd.DataFrame):
     """Mapuje kolumny -> daty na podstawie: wiersz 3 (miesiąc), wiersz 5 (dzień) i nagłówka z latami."""
     header_text = str(df.iat[1,0]) if df.shape[0] > 1 and pd.notna(df.iat[1,0]) else ""
     m = re.search(r'(20\d{2})/(20\d{2})', header_text)
@@ -87,7 +106,7 @@ def _build_col_date_table(df: pd.DataFrame):
     col_date = {}
     for c in range(1, df.shape[1]):
         mcell = df.iat[2, c] if df.shape[0] > 2 else None
-        mm = _month_from_label(mcell)
+        mm = _month_from_label_old(mcell)
         if mm: current_month = mm
         d = df.iat[4, c] if df.shape[0] > 4 else None
         if pd.notna(d) and current_month is not None:
@@ -99,7 +118,7 @@ def _build_col_date_table(df: pd.DataFrame):
                 pass
     return col_date
 
-def _find_group_row(df: pd.DataFrame, label='11'):
+def _find_group_row_old(df: pd.DataFrame, label='11'):
     """Znajdź wiersz, którego pierwsza kolumna to '11' (obsługuje 11/11.0/'11')."""
     want = str(label)
     for i in range(df.shape[0]):
@@ -116,7 +135,7 @@ def _find_group_row(df: pd.DataFrame, label='11'):
             return i
     return None
 
-def _build_code_info(df: pd.DataFrame):
+def _build_code_info_old(df: pd.DataFrame):
     """Buduje mapę: kod -> {subject, ward, location, teacher, default_time} z legendy (wiersze 22..38)."""
     code_info = {}
     time_re = re.compile(r'(\d{1,2}:\d{2}).*?(\d{1,2}:\d{2})', re.I)
@@ -197,26 +216,20 @@ def _build_code_info(df: pd.DataFrame):
                                  'location':'','teacher':'','default_time':None})
     return code_info
 
-# =========================
-# PARSER PRAKTYK (grupa 11) – z tolerancyjnym parsowaniem godzin
-# =========================
 @st.cache_data(ttl=600)
-def load_practicals_group11(file_path: str) -> pd.DataFrame:
+def load_practicals_group11_old(file_path: str) -> pd.DataFrame:
     raw = pd.read_excel(file_path, sheet_name="grafik", header=None)
 
-    # kolumna->data: miesiąc w wierszu 3 (idx 2), dzień w 5 (idx 4)
-    col_date = _build_col_date_table(raw)
-
-    grp_row = _find_group_row(raw, '11')
+    col_date = _build_col_date_table_old(raw)
+    grp_row = _find_group_row_old(raw, '11')
     if grp_row is None:
-        grp_row = 10 if raw.shape[0] > 10 else None  # fallback: 11. wiersz (0-index 10)
+        grp_row = 10 if raw.shape[0] > 10 else None
     if grp_row is None:
         return pd.DataFrame(columns=["date","subject","instructor","room","group",
-                                     "start_time_obj","end_time_obj","start_time","end_time"])
+                                     "start_time_obj","end_time_obj","start_time","end_time","cell_color"])
 
-    code_info = _build_code_info(raw)
+    code_info = _build_code_info_old(raw)
 
-    # akceptuj "7:30-17:15", "07:30–17:15", "7.30-17.15"
     time_range_re = re.compile(r'(\d{1,2}[:.]\d{2})\s*[-–]\s*(\d{1,2}[:.]\d{2})')
 
     def _parse_hhmm_forgiving(s: str):
@@ -229,36 +242,17 @@ def load_practicals_group11(file_path: str) -> pd.DataFrame:
             return dtime(h, mi)
         return None
 
-    def add_row(out, the_date, subject, teacher, room, s, e):
-        stime = _parse_hhmm_forgiving(s)
-        etime = _parse_hhmm_forgiving(e)
-        if not stime or not etime:
-            return
-        out.append({
-            "date": pd.to_datetime(the_date),
-            "subject": subject,
-            "instructor": teacher or "",
-            "room": room or "",
-            "group": "11",
-            "start_time_obj": stime,
-            "end_time_obj": etime,
-            "start_time": stime.strftime("%H:%M"),
-            "end_time": etime.strftime("%H:%M"),
-        })
-
     rows_out = []
     for c, the_date in col_date.items():
         cell = raw.iat[grp_row, c]
         if pd.isna(cell):
             continue
-        # obsłuż wielokrotne wpisy w jednej komórce (oddzielone ; lub nową linią)
         pieces = re.split(r'[;\n]+', str(cell))
         for piece in (p.strip() for p in pieces if p and p.strip()):
             times = time_range_re.findall(piece)
             core = time_range_re.sub('', piece)
             core = re.sub(r'(?i)godz\.\s*', '', core).strip(" -–•.,;")
 
-            # kod = pierwszy token (np. 'C', 'OOO8', 'CSM7'…)
             m_code = re.search(r'\b([A-Za-z]{1,4}\d{0,3}|\d{1,3})\b', core)
             code = m_code.group(1).upper() if m_code else None
 
@@ -271,16 +265,346 @@ def load_practicals_group11(file_path: str) -> pd.DataFrame:
 
             if times:
                 for s, e in times:
-                    add_row(rows_out, the_date, subject, teacher, room, s, e)
+                    stime = _parse_hhmm_forgiving(s)
+                    etime = _parse_hhmm_forgiving(e)
+                    if not stime or not etime:
+                        continue
+                    rows_out.append({
+                        "date": pd.to_datetime(the_date),
+                        "subject": subject,
+                        "instructor": teacher or "",
+                        "room": room or "",
+                        "group": "11",
+                        "start_time_obj": stime,
+                        "end_time_obj": etime,
+                        "start_time": stime.strftime("%H:%M"),
+                        "end_time": etime.strftime("%H:%M"),
+                        "cell_color": None
+                    })
             else:
                 s, e = (meta.get('default_time') or ('07:30','15:00'))
-                add_row(rows_out, the_date, subject, teacher, room, s, e)
+                stime = _parse_hhmm_forgiving(s)
+                etime = _parse_hhmm_forgiving(e)
+                if stime and etime:
+                    rows_out.append({
+                        "date": pd.to_datetime(the_date),
+                        "subject": subject,
+                        "instructor": teacher or "",
+                        "room": room or "",
+                        "group": "11",
+                        "start_time_obj": stime,
+                        "end_time_obj": etime,
+                        "start_time": stime.strftime("%H:%M"),
+                        "end_time": etime.strftime("%H:%M"),
+                        "cell_color": None
+                    })
 
     out = pd.DataFrame(rows_out)
     if not out.empty:
         out.sort_values(by=["date", "start_time_obj"], inplace=True)
         out.reset_index(drop=True, inplace=True)
     return out
+
+# =========================
+# PRAKTYKI — PARSER „NOWY” (openpyxl + kolory) dla pliku z arkuszem 'grafik'
+# =========================
+MONTHS_PL = {
+    'STYCZEŃ':1,'STYCZEN':1,'LUTY':2,'MARZEC':3,'KWIECIEŃ':4,'KWIECIEN':4,
+    'MAJ':5,'CZERWIEC':6,'LIPIEC':7,'SIERPIEŃ':8,'SIERPIEN':8,
+    'WRZESIEŃ':9,'WRZESIEN':9,'PAŹDZIERNIK':10,'PAZDZIERNIK':10,
+    'LISTOPAD':11,'GRUDZIEŃ':12,'GRUDZIEN':12
+}
+
+def _normalize_str(x) -> str:
+    if x is None: return ""
+    if isinstance(x, float) and x.is_integer():
+        return str(int(x))
+    return str(x).strip()
+
+def _find_years_from_header(ws) -> Tuple[int, int]:
+    for r in range(1, min(6, ws.max_row)+1):
+        row_text = " ".join(_normalize_str(ws.cell(r,c).value) for c in range(1, min(8, ws.max_column)+1))
+        m = re.search(r'(20\d{2})\s*[/\-]\s*(20\d{2})', row_text)
+        if m:
+            return int(m.group(1)), int(m.group(2))
+    today = datetime.now(TZ_WA).date()
+    return (today.year, today.year+1) if today.month >= 9 else (today.year-1, today.year)
+
+def _find_header_rows(ws) -> Tuple[Optional[int], Optional[int]]:
+    month_row = None
+    day_row = None
+    for r in range(1, min(12, ws.max_row)+1):
+        texts = [_normalize_str(ws.cell(r, c).value).upper() for c in range(1, min(40, ws.max_column)+1)]
+        if any(t in MONTHS_PL for t in texts if t):
+            month_row = r
+            break
+    for r in range(1, min(15, ws.max_row)+1):
+        nums = 0
+        for c in range(1, min(60, ws.max_column)+1):
+            v = ws.cell(r, c).value
+            if v is None: continue
+            if isinstance(v, float) and v.is_integer(): v = int(v)
+            if isinstance(v, int) and 1 <= v <= 31:
+                nums += 1
+        if nums >= 5:
+            day_row = r
+            break
+    return month_row, day_row
+
+def _month_from_label(lbl: str) -> Optional[int]:
+    if not isinstance(lbl, str): return None
+    s = lbl.strip().upper()
+    return MONTHS_PL.get(s)
+
+def _build_col_date_table_xl(ws) -> Dict[int, ddate]:
+    start_year, end_year = _find_years_from_header(ws)
+    month_row, day_row = _find_header_rows(ws)
+    if month_row is None: month_row = 3
+    if day_row is None: day_row = 5
+
+    col_date: Dict[int, ddate] = {}
+    current_month = None
+    for c in range(2, ws.max_column+1):
+        mcell = ws.cell(month_row, c).value
+        mm = _month_from_label(_normalize_str(mcell))
+        if mm:
+            current_month = mm
+        dcell = ws.cell(day_row, c).value
+        if dcell is None or current_month is None:
+            continue
+        try:
+            if isinstance(dcell, float) and dcell.is_integer():
+                day = int(dcell)
+            elif isinstance(dcell, int):
+                day = dcell
+            else:
+                day = int(str(dcell).strip().split()[0])
+        except Exception:
+            continue
+        if not (1 <= day <= 31):
+            continue
+        year = start_year if current_month >= 9 else end_year
+        try:
+            dt = ddate(year, current_month, day)
+        except Exception:
+            continue
+        col_date[c] = dt
+    return col_date
+
+def _find_group_row_xl(ws, group_label='11') -> Optional[int]:
+    want = str(group_label)
+    for r in range(1, min(200, ws.max_row)+1):
+        v = ws.cell(r,1).value
+        if v is None:
+            continue
+        s = _normalize_str(v)
+        if s.endswith('.0') and s[:-2].isdigit():
+            s = s[:-2]
+        if s == want:
+            return r
+    return None
+
+def _parse_forgiving_time(s: str) -> Optional[dtime]:
+    s = _normalize_str(s)
+    m = re.match(r'^\s*(\d{1,2})[:.](\d{2})\s*$', s)
+    if not m:
+        return None
+    h, mi = int(m.group(1)), int(m.group(2))
+    if 0 <= h <= 23 and 0 <= mi <= 59:
+        return dtime(h, mi)
+    return None
+
+def _extract_color(cell) -> Optional[str]:
+    fill = getattr(cell, "fill", None)
+    fg = getattr(fill, "fgColor", None) if fill else None
+    rgb = getattr(fg, "rgb", None) if fg else None
+    if not rgb:
+        return None
+    if len(rgb) == 8:
+        return "#" + rgb[-6:]
+    if len(rgb) == 6:
+        return "#" + rgb
+    return None
+
+def _build_code_info_xl(ws) -> Dict[str, dict]:
+    code_info = {}
+    time_re = re.compile(r'(\d{1,2}[:.]\d{2}).*?(\d{1,2}[:.]\d{2})')
+
+    def looks_location(s: str) -> bool:
+        s2 = s.lower()
+        return (' ul.' in s2) or ('szpital' in s2) or ('przychodnia' in s2) or (',' in s2 and len(s) > 10)
+
+    def looks_teacher(s: str) -> bool:
+        return (len(s) > 8 and (' ' in s or '-' in s)) and not s.isupper()
+
+    for r in range(18, min(70, ws.max_row)+1):
+        cells = [_normalize_str(ws.cell(r,c).value) for c in range(1, ws.max_column+1)]
+        cells = [s for s in cells if s]
+        if not cells:
+            continue
+
+        raw_code = _normalize_str(ws.cell(r,2).value)
+        if not raw_code:
+            m = re.search(r'\b([A-Za-z]{1,4}\d{0,3}|\d{1,3})\b', " ".join(cells))
+            raw_code = m.group(1) if m else None
+        if not raw_code:
+            continue
+
+        code = raw_code.upper()
+        subject, ward, location, teacher, default_time = '', '', '', '', None
+
+        for s in cells:
+            m = time_re.search(s)
+            if m:
+                default_time = (m.group(1).replace('.',':'), m.group(2).replace('.',':'))
+                break
+
+        long_texts = [s for s in cells if len(s) > 12 and not time_re.search(s)]
+        if long_texts:
+            subject = max(long_texts, key=len)
+
+        wards = [s for s in cells if re.fullmatch(r'[A-Z]{2,4}', s)]
+        if wards:
+            for pref in ('POZ','CSM','SOR','ZOL','USK','UO'):
+                if pref in wards:
+                    ward = pref; break
+            if not ward:
+                ward = wards[0]
+
+        locs = [s for s in cells if looks_location(s)]
+        if locs:
+            location = max(locs, key=len)
+
+        teachers = [s for s in cells if looks_teacher(s)]
+        if teachers:
+            teacher = teachers[-1]
+
+        code_info[code] = {
+            'subject': subject or code,
+            'ward': ward,
+            'location': location,
+            'teacher': teacher,
+            'default_time': default_time
+        }
+
+    code_info.setdefault('CSM', {'subject':'Centrum Symulacji Medycznych','ward':'CSM',
+                                 'location':'','teacher':'','default_time':None})
+    return code_info
+
+@st.cache_data(ttl=600)
+def load_practicals_group11_uploaded(file_path: str) -> pd.DataFrame:
+    from openpyxl import load_workbook
+    wb = load_workbook(file_path, data_only=True)
+    if "grafik" not in wb.sheetnames:
+        return pd.DataFrame()
+    ws = wb["grafik"]
+
+    col_date = _build_col_date_table_xl(ws)
+    grp_row = _find_group_row_xl(ws, '11') or 11
+    code_info = _build_code_info_xl(ws)
+
+    time_range_re = re.compile(r'(\d{1,2}[:.]\d{2})\s*[-–]\s*(\d{1,2}[:.]\d{2})')
+    rows_out: List[dict] = []
+
+    for c, the_date in col_date.items():
+        cell = ws.cell(grp_row, c)
+        raw = _normalize_str(cell.value)
+        if not raw:
+            continue
+        cell_color = _extract_color(cell)
+
+        pieces = re.split(r'[;\n]+', raw)
+        for piece in (p.strip() for p in pieces if p and p.strip()):
+            times = time_range_re.findall(piece.replace('godz.', '').replace('godz', ''))
+            core = time_range_re.sub('', piece)
+            core = re.sub(r'(?i)godz\.\s*', '', core).strip(" -–•.,;")
+
+            m_code = re.search(r'\b([A-Za-z]{1,4}\d{0,3}|\d{1,3})\b', core)
+            code = m_code.group(1).upper() if m_code else None
+
+            meta = code_info.get(code or "", {})
+            subject = meta.get('subject') or (core if core else "Praktyki")
+            ward = meta.get('ward','')
+            location = meta.get('location','')
+            teacher = meta.get('teacher','')
+            room = " • ".join([x for x in [ward, location] if x]) or (code or "")
+
+            if times:
+                for s,e in times:
+                    stime = _parse_forgiving_time(s.replace('.',':'))
+                    etime = _parse_forgiving_time(e.replace('.',':'))
+                    if not stime or not etime:
+                        continue
+                    rows_out.append({
+                        "date": pd.to_datetime(the_date),
+                        "subject": subject,
+                        "instructor": teacher or "",
+                        "room": room or "",
+                        "group": "11",
+                        "start_time_obj": stime,
+                        "end_time_obj": etime,
+                        "start_time": stime.strftime("%H:%M"),
+                        "end_time": etime.strftime("%H:%M"),
+                        "cell_color": cell_color
+                    })
+            else:
+                s, e = (meta.get('default_time') or ('07:30','15:00'))
+                stime = _parse_forgiving_time(s.replace('.',':'))
+                etime = _parse_forgiving_time(e.replace('.',':'))
+                if stime and etime:
+                    rows_out.append({
+                        "date": pd.to_datetime(the_date),
+                        "subject": subject,
+                        "instructor": teacher or "",
+                        "room": room or "",
+                        "group": "11",
+                        "start_time_obj": stime,
+                        "end_time_obj": etime,
+                        "start_time": stime.strftime("%H:%M"),
+                        "end_time": etime.strftime("%H:%M"),
+                        "cell_color": cell_color
+                    })
+
+    out = pd.DataFrame(rows_out)
+    if not out.empty:
+        out.sort_values(by=["date", "start_time_obj"], inplace=True)
+        out.reset_index(drop=True, inplace=True)
+    return out
+
+# =========================
+# WYBÓR PARSERA PRAKTYK
+# =========================
+@st.cache_data(ttl=600)
+def load_practicals_auto(file_path: str) -> pd.DataFrame:
+    """Wybiera parser: jeśli w xlsx jest arkusz 'grafik' -> nowy (openpyxl + kolory).
+       Jeśli nie da rady lub wyjdzie pusto, próbuje parsera starego."""
+    try:
+        from openpyxl import load_workbook
+        wb = load_workbook(file_path, data_only=True)
+        use_new = "grafik" in wb.sheetnames
+    except Exception:
+        use_new = False
+
+    df = pd.DataFrame()
+    if use_new:
+        try:
+            df = load_practicals_group11_uploaded(file_path)
+        except Exception:
+            df = pd.DataFrame()
+
+    if df.empty:
+        # fallback do „starego” parsera (pandas), też szuka 'grafik'
+        try:
+            df = load_practicals_group11_old(file_path)
+        except Exception:
+            df = pd.DataFrame()
+
+    # Upewnij się, że są kolumny zgodne z resztą UI
+    if not df.empty:
+        for col in ["cell_color"]:
+            if col not in df.columns:
+                df[col] = None
+    return df
 
 # =========================
 # STYLE
@@ -336,9 +660,6 @@ st.markdown("""
 # =========================
 # KALENDARZ / UI
 # =========================
-def to_minutes(t: dtime) -> int:
-    return t.hour * 60 + t.minute
-
 def assign_columns_and_clusters(evts):
     result = []; active = []; free_cols = []; next_col = 0
     clusters, current_cluster = [], []
@@ -372,12 +693,12 @@ try:
     # Główny plan
     df_main = load_data(MAIN_PLAN_FILE)
 
-    # Praktyki (grupa 11)
+    # Praktyki (grupa 11): autodetekcja parsera
     df_pr = pd.DataFrame()
     prat_file = _first_existing(PRACTICAL_CANDIDATES)
     if prat_file:
         try:
-            df_pr = load_practicals_group11(prat_file)
+            df_pr = load_practicals_auto(prat_file)
         except Exception:
             df_pr = pd.DataFrame()
 
@@ -410,7 +731,7 @@ try:
         st.session_state.current_week_start += timedelta(days=7)
         st.rerun()
 
-    # ✅ Checkbox „Grupy Magdalenki” – działa WYŁĄCZNIE na df_main
+    # Checkbox „Grupy Magdalenki” – działa WYŁĄCZNIE na df_main
     filter_magdalenki = st.checkbox("**:red[Grupy Magdalenki]**", value=False)
 
     df_main_src = df_main
@@ -454,7 +775,7 @@ try:
     day_events = df_all[df_all['date'].dt.date == selected_day_date]
     st.markdown(f"### {selected_day_date.strftime('%A, %d.%m.%Y')}")
 
-    # ---- OŚ CZASU + PŁÓTNO KALENDARZA ----
+    # OŚ CZASU
     base_start, base_end = dtime(7, 0), dtime(21, 0)
     base_start_m, base_end_m = to_minutes(base_start), to_minutes(base_end)
 
@@ -475,7 +796,7 @@ try:
     duration = max(60, end_m - start_m)
     height_px = duration * PX_PER_MIN
 
-    # Godzinowe ticki (lewa szyna)
+    # Godzinowe ticki
     first_tick_h = math.ceil(start_m / 60)
     last_tick_h  = math.floor(end_m / 60)
     ticks_html = []
@@ -484,7 +805,7 @@ try:
         ticks_html.append(f"<div class='tick' style='top:{top:.2f}px'></div>")
         ticks_html.append(f"<div class='tick-label' style='top:{top:.2f}px'>{h:02d}:00</div>")
 
-    # Eventy do rysowania
+    # Eventy
     events = []
     for _, e in day_events.iterrows():
         if pd.isna(e['start_time_obj']) or pd.isna(e['end_time_obj']):
@@ -498,42 +819,14 @@ try:
             "group": e.get("group",""),
             "start_str": e.get("start_time",""),
             "end_str": e.get("end_time",""),
+            "cell_color": e.get("cell_color", None),
         })
     events.sort(key=lambda x: (x["start_min"], x["end_min"]))
 
     # Kolumny + klastry
-    def assign_columns_and_clusters_local(evts):
-        result = []; active = []; free_cols = []; next_col = 0
-        clusters, current_cluster = [], []
-        for idx, ev in enumerate(evts):
-            while active and active[0][0] <= ev["start_min"]:
-                _, col_finished, _ = heapq.heappop(active)
-                free_cols.append(col_finished); free_cols.sort()
-            if not active and current_cluster:
-                clusters.append(current_cluster); current_cluster = []
-            col = free_cols.pop(0) if free_cols else next_col
-            if col == next_col: next_col += 1
-            heapq.heappush(active, (ev["end_min"], col, idx))
-            result.append({**ev, "col": col, "cluster_id": -1})
-            current_cluster.append((idx, ev["start_min"], ev["end_min"], col))
-        if current_cluster: clusters.append(current_cluster)
-        cluster_cols = {}
-        for c_id, items in enumerate(clusters):
-            points = []
-            for _, s, e, _ in items:
-                points.append((s, 1)); points.append((e, -1))
-            points.sort(key=lambda x: (x[0], -x[1]))
-            cur = peak = 0
-            for _, d in points:
-                cur += d; peak = max(peak, cur)
-            cluster_cols[c_id] = max(1, peak)
-            for idx, *_ in items:
-                result[idx]["cluster_id"] = c_id
-        return result, cluster_cols
+    positioned, cluster_cols = assign_columns_and_clusters(events)
 
-    positioned, cluster_cols = assign_columns_and_clusters_local(events)
-
-    # Render eventów
+    # Render
     PX = PX_PER_MIN
     events_html_parts = []
     for ev in positioned:
@@ -542,9 +835,17 @@ try:
         left_pct = ev["col"] * width_pct
         top = (ev["start_min"] - start_m) * PX
         height = max(34, (ev["end_min"] - ev["start_min"]) * PX)
+
+        style_extra = ""
+        if ev.get("cell_color"):
+            rgb = _hex_to_rgb_tuple(ev["cell_color"])
+            if rgb:
+                r,g,b = rgb
+                style_extra = f"background: rgba({r},{g},{b},.12); border-color: rgb({r},{g},{b});"
+
         part = (
             f"<div class='event' style='top:{top:.2f}px;height:{height:.2f}px;"
-            f"left:calc({left_pct}% + 2px);width:calc({width_pct}% - 6px);'>"
+            f"left:calc({left_pct}% + 2px);width:calc({width_pct}% - 6px);{style_extra}'>"
             f"<div class='title'>{ev['subject']}</div>"
             f"<div class='meta'>{ev['start_str']}–{ev['end_str']} • Sala/Oddz: {ev['room']} • Gr {ev['group']}<br>{ev['instructor']}</div>"
             f"</div>"
