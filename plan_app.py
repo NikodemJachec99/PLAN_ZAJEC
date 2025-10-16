@@ -7,12 +7,11 @@ from zoneinfo import ZoneInfo
 import os
 
 # --- STAŁE / KONFIG ---
-HOUR_HEIGHT_PX = 65         # 1h = 65px (zmień na 60/55 jeśli chcesz jeszcze ciaśniej)
+HOUR_HEIGHT_PX = 65         # 1h = 65px
 COMPACT_RANGE   = True      # przycinaj widok do zakresu zajęć (+/- 15 min)
 TZ_WA = ZoneInfo("Europe/Warsaw")
 
 PLAN_PATH = "plan_zajec.xlsx"
-# Użyjemy pliku tidy z praktykami (gr. 11) — najpierw spróbuj wersji z (1), potem bez
 PRAKTYKI_TIDY_CANDIDATES = ["praktyki_tidy (1).xlsx", "praktyki_tidy.xlsx"]
 
 # --- USTAWIENIA STRONY ---
@@ -33,6 +32,39 @@ try:
 except Exception:
     st.markdown("<script>setTimeout(()=>window.location.reload(), 60000);</script>", unsafe_allow_html=True)
 
+# --- UTIL: bezpieczny concat i normalizacja czasu ---
+def concat_nonempty(dfs):
+    dfs = [df.dropna(axis=1, how="all") for df in dfs if df is not None and not df.empty]
+    if not dfs:
+        return pd.DataFrame()
+    return pd.concat(dfs, ignore_index=True, sort=False)
+
+def normalize_time_series(series):
+    """Obsłuż HH:MM, HH:MM:SS, datetime.time; zwróć dtype=object z wartościami time lub None."""
+    def parse_one(x):
+        if pd.isna(x):
+            return None
+        if isinstance(x, dtime):
+            return x
+        s = str(x).strip()
+        # spróbuj szybkie ścieżki
+        for fmt in ("%H:%M:%S", "%H:%M"):
+            try:
+                return datetime.strptime(s, fmt).time()
+            except Exception:
+                pass
+        # fallback: pd.to_datetime (łapie też excellowe datetime)
+        try:
+            dt = pd.to_datetime(x, errors="coerce")
+            if pd.isna(dt):
+                return None
+            # jeśli to Timestamp -> ma date+time; bierz sam time
+            return (dt.to_pydatetime().time()
+                    if hasattr(dt, "to_pydatetime") else None)
+        except Exception:
+            return None
+    return series.apply(parse_one)
+
 # --- WCZYTYWANIE DANYCH: główny plik ---
 @st.cache_data(ttl=600)
 def load_data(file_path: str) -> pd.DataFrame:
@@ -46,53 +78,62 @@ def load_data(file_path: str) -> pd.DataFrame:
 
     df = df[['date', 'day_of_week', 'start_time', 'end_time', 'subject',
              'type', 'degree', 'first_name', 'last_name', 'room', 'group']].copy()
+
+    # data
     df.dropna(subset=['date'], inplace=True)
     df['date'] = pd.to_datetime(df['date'], errors='coerce')
     df.dropna(subset=['date'], inplace=True)
 
+    # nauczyciel / grupa
     df['instructor'] = (
         df['degree'].fillna('') + ' ' + df['first_name'].fillna('') + ' ' + df['last_name'].fillna('')
     ).str.strip()
     df['group'] = df['group'].fillna('---').astype(str)
 
-    df['start_time_obj'] = pd.to_datetime(df['start_time'], format='%H:%M:%S', errors='coerce').dt.time
-    df['end_time_obj']   = pd.to_datetime(df['end_time'],   format='%H:%M:%S', errors='coerce').dt.time
-    df['start_time'] = df['start_time_obj'].apply(lambda x: x.strftime('%H:%M') if pd.notnull(x) else 'Błąd')
-    df['end_time']   = df['end_time_obj'].apply(  lambda x: x.strftime('%H:%M') if pd.notnull(x) else 'Błąd')
+    # GODZINY — ROBUST
+    df['start_time_obj'] = normalize_time_series(df['start_time'])
+    df['end_time_obj']   = normalize_time_series(df['end_time'])
+    df['start_time'] = df['start_time_obj'].apply(lambda x: x.strftime('%H:%M') if x else '')
+    df['end_time']   = df['end_time_obj'].apply(  lambda x: x.strftime('%H:%M') if x else '')
 
-    # główny plik nie ma „oddziału” — dodaj pustą kolumnę dla spójności
+    # spójność kolumn
     df['oddzial'] = ""
 
-    df.sort_values(by=['date', 'start_time_obj'], inplace=True)
+    df.sort_values(by=['date', 'start_time_obj'], inplace=True, na_position='last')
     return df
 
 # --- WCZYTYWANIE DANYCH: praktyki (TIDY) ---
 @st.cache_data(ttl=600)
-def load_praktyki_tidy(candidates: list[str]) -> pd.DataFrame:
+def load_praktyki_tidy(candidates) -> pd.DataFrame:
     path_used = None
     for p in candidates:
         if os.path.exists(p):
             path_used = p
             break
     if path_used is None:
-        # brak pliku — zwróć pusty DF w zgodnym formacie
         return pd.DataFrame(columns=[
             "date","start_time","end_time","subject","instructor","room","group",
             "start_time_obj","end_time_obj","oddzial"
         ])
 
     dfp = pd.read_excel(path_used)
+
     # Ujednolicenie typów
     dfp["date"] = pd.to_datetime(dfp["date"], errors='coerce')
-    dfp = dfp.dropna(subset=["date"]).copy()
+    dfp.dropna(subset=["date"], inplace=True)
 
-    # start/end time: mogą być już w stringach HH:MM lub obiektach time
-    if "start_time_obj" not in dfp.columns:
-        dfp["start_time_obj"] = pd.to_datetime(dfp["start_time"], format="%H:%M", errors="coerce").dt.time
-    if "end_time_obj" not in dfp.columns:
-        dfp["end_time_obj"]   = pd.to_datetime(dfp["end_time"],   format="%H:%M", errors="coerce").dt.time
+    # Normalizacja godzin (nie zakładamy konkretnego formatu)
+    if "start_time_obj" in dfp.columns and dfp["start_time_obj"].notna().any():
+        dfp["start_time_obj"] = normalize_time_series(dfp["start_time_obj"])
+    else:
+        dfp["start_time_obj"] = normalize_time_series(dfp.get("start_time", pd.Series([None]*len(dfp))))
 
-    # Jeżeli są kolumny z polskimi nazwami — przemapuj na subject/room/instructor
+    if "end_time_obj" in dfp.columns and dfp["end_time_obj"].notna().any():
+        dfp["end_time_obj"] = normalize_time_series(dfp["end_time_obj"])
+    else:
+        dfp["end_time_obj"] = normalize_time_series(dfp.get("end_time", pd.Series([None]*len(dfp))))
+
+    # Polskie aliasy -> subject/room/instructor
     if "przedmiot" in dfp.columns:
         dfp["subject"] = dfp["przedmiot"]
     if "prowadzacy" in dfp.columns:
@@ -100,24 +141,20 @@ def load_praktyki_tidy(candidates: list[str]) -> pd.DataFrame:
     if "miejsce" in dfp.columns:
         dfp["room"] = dfp["miejsce"]
 
-    # Zadbaj o brakujące kolumny
     for col in ["subject","instructor","room","group","oddzial"]:
         if col not in dfp.columns:
             dfp[col] = ""
 
-    # Na końcu ustaw datę jako datetime64[ns] (dla .dt.date później)
-    dfp["date"] = pd.to_datetime(dfp["date"])
-
-    # Wyjściowy shape spójny z głównym
-    dfp["start_time"] = dfp["start_time_obj"].apply(lambda x: x.strftime("%H:%M") if pd.notnull(x) else "")
-    dfp["end_time"]   = dfp["end_time_obj"].apply(  lambda x: x.strftime("%H:%M") if pd.notnull(x) else "")
+    # finalne str z godzin
+    dfp["start_time"] = dfp["start_time_obj"].apply(lambda x: x.strftime("%H:%M") if x else "")
+    dfp["end_time"]   = dfp["end_time_obj"].apply(  lambda x: x.strftime("%H:%M") if x else "")
 
     return dfp[[
         "date","start_time","end_time","subject","instructor","room","group",
         "start_time_obj","end_time_obj","oddzial"
-    ]].sort_values(["date","start_time"])
+    ]].sort_values(["date","start_time"], na_position='last')
 
-# --- STYLE: kompaktowy UI (mniejsze fonty/przyciski/osi) ---
+# --- STYLE (kompakt) ---
 st.markdown("""
 <style>
   html { font-size: 14px; }
@@ -171,7 +208,6 @@ def to_minutes(t: dtime) -> int:
     return t.hour * 60 + t.minute
 
 def assign_columns_and_clusters(evts):
-    """Nadaje kolumny i identyfikuje klastry (ciągi nakładających się eventów)."""
     result = []
     active = []        # min-heap po end_min: (end_min, col, idx)
     free_cols = []     # lista wolnych kolumn
@@ -219,8 +255,8 @@ try:
     df_main = load_data(PLAN_PATH)
     df_pr   = load_praktyki_tidy(PRAKTYKI_TIDY_CANDIDATES)
 
-    # Połącz źródła
-    df = pd.concat([df_main, df_pr], ignore_index=True, sort=False)
+    # Połącz źródła BEZ ostrzeżeń
+    df = concat_nonempty([df_main, df_pr])
 
     st.title("Plan Zajęć ❤️")
 
@@ -232,7 +268,7 @@ try:
     if 'current_week_start' not in st.session_state:
         st.session_state.current_week_start = today - timedelta(days=today.weekday())
     if 'selected_day_offset' not in st.session_state:
-        st.session_state.selected_day_offset = min(today.weekday(), 4)  # jeśli sob/ndz → ustaw na Pt
+        st.session_state.selected_day_offset = min(today.weekday(), 4)  # jeśli sob/ndz → Pt
 
     # Nawigacja tygodnia
     week_start = st.session_state.current_week_start
@@ -251,7 +287,7 @@ try:
         st.session_state.current_week_start += timedelta(days=7)
         st.rerun()
 
-    # (opcjonalnie) filtr z Twojej poprzedniej wersji
+    # (opcjonalnie) filtr
     filter_magdalenki = st.checkbox("**:red[Grupy Magdalenki]**", value=False)
 
     # Skala pionowa
@@ -267,7 +303,7 @@ try:
             st.session_state.selected_day_offset = off
             st.rerun()
 
-    # Źródło bazowe do filtra „Magdalenki” (tylko na df_main)
+    # Filtrowanie tylko na bazowym planie
     df_src = df_main
     if filter_magdalenki:
         def _is_whole_year(g: str) -> bool:
@@ -283,14 +319,16 @@ try:
         df_src = df_main[df_main["group"].apply(_keep_row)]
 
     # Final: bazowy (po filtrze) + praktyki tidy
-    df_all = pd.concat([df_src, df_pr], ignore_index=True, sort=False)
+    df_all = concat_nonempty([df_src, df_pr])
 
-    # Dane dnia
-    selected_day_date = week_start + timedelta(days=st.session_state.selected_day_offset)
-    # Upewnij się, że 'date' ma dtype datetime64[ns] (dla .dt.date)
+    # Upewnij się, że 'date' to datetime64[ns]
     if not pd.api.types.is_datetime64_any_dtype(df_all["date"]):
         df_all["date"] = pd.to_datetime(df_all["date"], errors="coerce")
+
+    # Dzień widoku
+    selected_day_date = week_start + timedelta(days=st.session_state.selected_day_offset)
     day_events = df_all[df_all['date'].dt.date == selected_day_date]
+
     st.markdown(f"### {selected_day_date.strftime('%A, %d.%m.%Y')}")
 
     # ---- OŚ CZASU + PŁÓTNO KALENDARZA ----
@@ -298,8 +336,8 @@ try:
     base_start_m, base_end_m = to_minutes(base_start), to_minutes(base_end)
 
     if not day_events.empty and COMPACT_RANGE:
-        ev_start_m = min(day_events['start_time_obj'].dropna().map(to_minutes))
-        ev_end_m   = max(day_events['end_time_obj'].dropna().map(to_minutes))
+        ev_start_m = min(day_events['start_time_obj'].dropna().map(to_minutes)) if day_events['start_time_obj'].notna().any() else base_start_m
+        ev_end_m   = max(day_events['end_time_obj'].dropna().map(to_minutes))   if day_events['end_time_obj'].notna().any()   else base_end_m
         start_m = max(base_start_m, int(math.floor((ev_start_m - 15) / 60) * 60))
         end_m   = min(base_end_m,  int(math.ceil((ev_end_m + 15) / 60) * 60))
     else:
@@ -312,9 +350,10 @@ try:
             start_m, end_m = base_start_m, base_end_m
 
     duration = max(60, end_m - start_m)
+    PX_PER_MIN = HOUR_HEIGHT_PX / 60.0
     height_px = duration * PX_PER_MIN
 
-    # Godzinowe ticki
+    # Ticki
     first_tick_h = math.ceil(start_m / 60)
     last_tick_h  = math.floor(end_m / 60)
     ticks_html = []
@@ -323,7 +362,7 @@ try:
         ticks_html.append(f"<div class='tick' style='top:{top:.2f}px'></div>")
         ticks_html.append(f"<div class='tick-label' style='top:{top:.2f}px'>{h:02d}:00</div>")
 
-    # Eventy -> lista słowników do pozycjonowania
+    # Eventy
     def safe_get(row, key, default=""):
         return row[key] if key in row and pd.notna(row[key]) else default
 
@@ -372,7 +411,7 @@ try:
             cur = peak = 0
             for _, d in points:
                 cur += d; peak = max(peak, cur)
-            cluster_cols[c_id] = max(1, peak)
+            cluster_cols[c_id] = max(peak, 1)
             for idx, *_ in items:
                 result[idx]["cluster_id"] = c_id
         return result, cluster_cols
@@ -388,7 +427,6 @@ try:
         top = (ev["start_min"] - start_m) * PX_PER_MIN
         height = max(34, (ev["end_min"] - ev["start_min"]) * PX_PER_MIN)
 
-        # Składanie linii meta z czyszczeniem pustych pól
         meta_parts = [f"{ev['start_str']}–{ev['end_str']}"]
         if ev.get("room"):    meta_parts.append(f"Sala {ev['room']}")
         if ev.get("group"):   meta_parts.append(f"Gr {ev['group']}")
@@ -426,7 +464,7 @@ try:
     )
     st.markdown(day_layout_html, unsafe_allow_html=True)
 
-    # Auto-scroll do „TERAZ”, jeśli wybrany dzień to dziś
+    # Auto-scroll do „TERAZ”
     if selected_day_date == today:
         st.markdown("""
         <script>
@@ -436,6 +474,6 @@ try:
         """, unsafe_allow_html=True)
 
 except FileNotFoundError:
-    st.error("Nie znaleziono `plan_zajec.xlsx` albo pliku z praktykami. Upewnij się, że leżą obok skryptu.")
+    st.error("Nie znaleziono wymaganych plików Excel obok skryptu.")
 except Exception as e:
     st.error(f"Wystąpił nieoczekiwany błąd: {e}")
