@@ -5,6 +5,7 @@ import math
 import heapq
 from zoneinfo import ZoneInfo
 import os
+import hashlib  # kolory per przedmiot
 
 # --- STAŁE / KONFIG ---
 HOUR_HEIGHT_PX = 65         # 1h = 65px
@@ -40,7 +41,7 @@ def concat_nonempty(dfs):
     return pd.concat(dfs, ignore_index=True, sort=False)
 
 def normalize_time_series(series):
-    """Obsłuż HH:MM, HH:MM:SS, datetime.time; zwróć dtype=object z wartościami time lub None."""
+    """Obsłuż HH:MM, HH:MM:SS, datetime.time; zwróć obiekty time lub None."""
     def parse_one(x):
         if pd.isna(x):
             return None
@@ -54,12 +55,28 @@ def normalize_time_series(series):
                 pass
         try:
             dt = pd.to_datetime(x, errors="coerce")
-            if pd.isna(dt):
-                return None
+            if pd.isna(dt): return None
             return dt.to_pydatetime().time() if hasattr(dt, "to_pydatetime") else None
         except Exception:
             return None
     return series.apply(parse_one)
+
+# --- KOLORY PER PRZEDMIOT ---
+def _hue_for(s: str) -> int:
+    s = (s or "").strip()
+    if not s:
+        return 210  # default (niebieskawy)
+    return int(hashlib.md5(s.encode()).hexdigest(), 16) % 360
+
+def color_from_str(s: str) -> str:
+    """Pastelowe tło na podstawie nazwy przedmiotu."""
+    h = _hue_for(s)
+    return f"hsl({h} 90% 92%)"
+
+def border_from_str(s: str) -> str:
+    """Akcent/obramowanie do tła."""
+    h = _hue_for(s)
+    return f"hsl({h} 85% 45%)"
 
 # --- WCZYTYWANIE DANYCH: główny plik ---
 @st.cache_data(ttl=600)
@@ -191,6 +208,18 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# --- DODATKOWE STYLE: wyraźniejsze meta + chipki ---
+st.markdown("""
+<style>
+  .event .meta { font-size:.78rem; color:#0f172a; line-height:1.25; }
+  .meta-chip {
+    display:inline-block; margin:2px 6px 0 0; padding:.15rem .45rem;
+    border-radius:999px; background:#eef2f7; border:1px solid #cbd5e1;
+    font-size:.72rem; white-space:nowrap;
+  }
+</style>
+""", unsafe_allow_html=True)
+
 # --- POMOCNICZE ---
 def to_minutes(t: dtime) -> int:
     return t.hour * 60 + t.minute
@@ -250,7 +279,7 @@ try:
     now_dt = datetime.now(timezone.utc).astimezone(TZ_WA)
     today = now_dt.date()
 
-    # Stan sesji
+    # Stan sesji + kalendarz
     if 'current_week_start' not in st.session_state:
         st.session_state.current_week_start = today - timedelta(days=today.weekday())
     if 'selected_day_offset' not in st.session_state:
@@ -276,8 +305,7 @@ try:
         st.session_state.current_week_start += timedelta(days=7)
         st.rerun()
 
-    # --- 📅 KALENDARZ MIESIĘCZNY (kliknij dzień, skaczemy do niego) ---
-    # Ustal zakres dostępnych dat na podstawie danych
+    # Kalendarz miesięczny
     if not df.empty and pd.api.types.is_datetime64_any_dtype(df["date"]):
         min_date = df["date"].min().date()
         max_date = df["date"].max().date()
@@ -285,7 +313,6 @@ try:
         min_date = today - timedelta(days=180)
         max_date = today + timedelta(days=365)
 
-    # Domyślna wartość = aktualnie oglądany dzień
     current_selected_dt = week_start + timedelta(days=st.session_state.selected_day_offset)
     st.session_state.calendar_selected_date = current_selected_dt
 
@@ -297,12 +324,10 @@ try:
         format="DD.MM.YYYY",
         help="Wybierz dowolny dzień — przerzucę widok do tego tygodnia i dnia."
     )
-
-    # Jeśli użytkownik wybrał inny dzień → ustaw tydzień oraz offset i odśwież
     if date_selected != current_selected_dt:
         new_week_start = date_selected - timedelta(days=date_selected.weekday())
         st.session_state.current_week_start = new_week_start
-        st.session_state.selected_day_offset = date_selected.weekday()  # pozwalamy też na sob/ndz
+        st.session_state.selected_day_offset = date_selected.weekday()
         st.session_state.calendar_selected_date = date_selected
         st.rerun()
 
@@ -312,7 +337,7 @@ try:
     # Skala pionowa
     PX_PER_MIN = HOUR_HEIGHT_PX / 60.0
 
-    # Zakładki Pon–Pt (weekendy ukryte jako przyciski, ale można je wybrać z kalendarza)
+    # Zakładki Pon–Pt
     days_of_week_pl = ["Pon", "Wt", "Śr", "Czw", "Pt", "Sob", "Niedz"]
     visible_offsets = [0, 1, 2, 3, 4]
     day_tabs = st.columns(len(visible_offsets))
@@ -331,10 +356,8 @@ try:
             return (s in {"---", "rok", "wszyscy", "all", "year"}) or ("rok" in s) or ("wsz" in s)
         def _keep_row(grp: str) -> bool:
             s = (grp or "").strip().lower()
-            if _is_whole_year(s):
-                return True
-            if any(ch.isdigit() for ch in s):
-                return s == "11" or s.startswith("11")
+            if _is_whole_year(s): return True
+            if any(ch.isdigit() for ch in s): return s == "11" or s.startswith("11")
             return s == "d" or s.startswith("d")
         df_src = df_main[df_main["group"].apply(_keep_row)]
 
@@ -344,11 +367,23 @@ try:
     if not pd.api.types.is_datetime64_any_dtype(df_all["date"]):
         df_all["date"] = pd.to_datetime(df_all["date"], errors="coerce")
 
-    # Dzień widoku (po kalendarzu / zakładkach)
+    # Dzień widoku
     selected_day_date = st.session_state.current_week_start + timedelta(days=st.session_state.selected_day_offset)
     day_events = df_all[df_all['date'].dt.date == selected_day_date]
 
     st.markdown(f"### {selected_day_date.strftime('%A, %d.%m.%Y')}")
+
+    # ── MINI-LEGENDA PRZEDMIOTÓW (dla bieżącego dnia) ─────────────────────────
+    if not day_events.empty and "subject" in day_events.columns:
+        unique_subj = [s for s in sorted(set(day_events["subject"].dropna())) if str(s).strip()]
+        if unique_subj:
+            chips = " ".join(
+                f"<span style='display:inline-block;margin:2px 8px 8px 0;padding:.28rem .6rem;"
+                f"border-radius:999px;background:{color_from_str(s)};border:1px solid {border_from_str(s)};"
+                f"font-size:.78rem;color:#0f172a;'>{s}</span>"
+                for s in unique_subj
+            )
+            st.markdown(f"<div style='margin:.25rem 0 .25rem'>{chips}</div>", unsafe_allow_html=True)
 
     # ---- OŚ CZASU + PŁÓTNO KALENDARZA ----
     base_start, base_end = dtime(7, 0), dtime(21, 0)
@@ -381,7 +416,7 @@ try:
         ticks_html.append(f"<div class='tick' style='top:{top:.2f}px'></div>")
         ticks_html.append(f"<div class='tick-label' style='top:{top:.2f}px'>{h:02d}:00</div>")
 
-    # Eventy
+    # Eventy (słowniki)
     def safe_get(row, key, default=""):
         return row[key] if key in row and pd.notna(row[key]) else default
 
@@ -402,6 +437,7 @@ try:
         })
     events.sort(key=lambda x: (x["start_min"], x["end_min"]))
 
+    # Kolumny + klastry
     def assign_columns_and_clusters_local(evts):
         result = []
         active = []
@@ -436,7 +472,7 @@ try:
 
     positioned, cluster_cols = assign_columns_and_clusters_local(events)
 
-    # Render eventów (Oddział w meta)
+    # Render eventów (kolory + chipki meta)
     events_html_parts = []
     for ev in positioned:
         total_cols = max(1, cluster_cols.get(ev["cluster_id"], 1))
@@ -445,18 +481,23 @@ try:
         top = (ev["start_min"] - start_m) * PX_PER_MIN
         height = max(34, (ev["end_min"] - ev["start_min"]) * PX_PER_MIN)
 
-        meta_parts = [f"{ev['start_str']}–{ev['end_str']}"]
-        if ev.get("room"):    meta_parts.append(f"Sala {ev['room']}")
-        if ev.get("group"):   meta_parts.append(f"Gr {ev['group']}")
-        if ev.get("oddzial"): meta_parts.append(f"Oddział {ev['oddzial']}")
-        meta_line = " • ".join(meta_parts)
+        subj = ev.get("subject", "")
+        bg = color_from_str(subj)
+        bd = border_from_str(subj)
+
+        chips = [f"<span class='meta-chip'>{ev['start_str']}–{ev['end_str']}</span>"]
+        if ev.get("room"):    chips.append(f"<span class='meta-chip'>Sala {ev['room']}</span>")
+        if ev.get("group"):   chips.append(f"<span class='meta-chip'>Gr {ev['group']}</span>")
+        if ev.get("oddzial"): chips.append(f"<span class='meta-chip'>Oddział {ev['oddzial']}</span>")
+        meta_html = "".join(chips)
         instructor_line = ev.get("instructor","")
 
         part = (
             f"<div class='event' style='top:{top:.2f}px;height:{height:.2f}px;"
-            f"left:calc({left_pct}% + 2px);width:calc({width_pct}% - 6px);'>"
-            f"<div class='title'>{ev['subject']}</div>"
-            f"<div class='meta'>{meta_line}<br>{instructor_line}</div>"
+            f"left:calc({left_pct}% + 2px);width:calc({width_pct}% - 6px);"
+            f"background:{bg}; border-color:{bd};'>"
+            f"<div class='title'>{subj}</div>"
+            f"<div class='meta'>{meta_html}<br>{instructor_line}</div>"
             f"</div>"
         )
         events_html_parts.append(part)
@@ -495,3 +536,6 @@ except FileNotFoundError:
     st.error("Nie znaleziono wymaganych plików Excel obok skryptu.")
 except Exception as e:
     st.error(f"Wystąpił nieoczekiwany błąd: {e}")
+
+
+st.write("Made with ❤️ for you!")
