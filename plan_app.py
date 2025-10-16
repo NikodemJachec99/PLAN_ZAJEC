@@ -47,20 +47,16 @@ def normalize_time_series(series):
         if isinstance(x, dtime):
             return x
         s = str(x).strip()
-        # spróbuj szybkie ścieżki
         for fmt in ("%H:%M:%S", "%H:%M"):
             try:
                 return datetime.strptime(s, fmt).time()
             except Exception:
                 pass
-        # fallback: pd.to_datetime (łapie też excellowe datetime)
         try:
             dt = pd.to_datetime(x, errors="coerce")
             if pd.isna(dt):
                 return None
-            # jeśli to Timestamp -> ma date+time; bierz sam time
-            return (dt.to_pydatetime().time()
-                    if hasattr(dt, "to_pydatetime") else None)
+            return dt.to_pydatetime().time() if hasattr(dt, "to_pydatetime") else None
         except Exception:
             return None
     return series.apply(parse_one)
@@ -79,25 +75,21 @@ def load_data(file_path: str) -> pd.DataFrame:
     df = df[['date', 'day_of_week', 'start_time', 'end_time', 'subject',
              'type', 'degree', 'first_name', 'last_name', 'room', 'group']].copy()
 
-    # data
     df.dropna(subset=['date'], inplace=True)
     df['date'] = pd.to_datetime(df['date'], errors='coerce')
     df.dropna(subset=['date'], inplace=True)
 
-    # nauczyciel / grupa
     df['instructor'] = (
         df['degree'].fillna('') + ' ' + df['first_name'].fillna('') + ' ' + df['last_name'].fillna('')
     ).str.strip()
     df['group'] = df['group'].fillna('---').astype(str)
 
-    # GODZINY — ROBUST
     df['start_time_obj'] = normalize_time_series(df['start_time'])
     df['end_time_obj']   = normalize_time_series(df['end_time'])
     df['start_time'] = df['start_time_obj'].apply(lambda x: x.strftime('%H:%M') if x else '')
     df['end_time']   = df['end_time_obj'].apply(  lambda x: x.strftime('%H:%M') if x else '')
 
-    # spójność kolumn
-    df['oddzial'] = ""
+    df['oddzial'] = ""  # główny plik nie ma oddziału
 
     df.sort_values(by=['date', 'start_time_obj'], inplace=True, na_position='last')
     return df
@@ -118,11 +110,9 @@ def load_praktyki_tidy(candidates) -> pd.DataFrame:
 
     dfp = pd.read_excel(path_used)
 
-    # Ujednolicenie typów
     dfp["date"] = pd.to_datetime(dfp["date"], errors='coerce')
     dfp.dropna(subset=["date"], inplace=True)
 
-    # Normalizacja godzin (nie zakładamy konkretnego formatu)
     if "start_time_obj" in dfp.columns and dfp["start_time_obj"].notna().any():
         dfp["start_time_obj"] = normalize_time_series(dfp["start_time_obj"])
     else:
@@ -133,7 +123,6 @@ def load_praktyki_tidy(candidates) -> pd.DataFrame:
     else:
         dfp["end_time_obj"] = normalize_time_series(dfp.get("end_time", pd.Series([None]*len(dfp))))
 
-    # Polskie aliasy -> subject/room/instructor
     if "przedmiot" in dfp.columns:
         dfp["subject"] = dfp["przedmiot"]
     if "prowadzacy" in dfp.columns:
@@ -145,7 +134,6 @@ def load_praktyki_tidy(candidates) -> pd.DataFrame:
         if col not in dfp.columns:
             dfp[col] = ""
 
-    # finalne str z godzin
     dfp["start_time"] = dfp["start_time_obj"].apply(lambda x: x.strftime("%H:%M") if x else "")
     dfp["end_time"]   = dfp["end_time_obj"].apply(  lambda x: x.strftime("%H:%M") if x else "")
 
@@ -244,7 +232,7 @@ def assign_columns_and_clusters(evts):
         for _, d in points:
             cur += d
             peak = max(peak, cur)
-        cluster_cols[c_id] = max(1, peak)
+        cluster_cols[c_id] = max(peak, 1)
         for idx, *_ in items:
             result[idx]["cluster_id"] = c_id
 
@@ -254,9 +242,7 @@ def assign_columns_and_clusters(evts):
 try:
     df_main = load_data(PLAN_PATH)
     df_pr   = load_praktyki_tidy(PRAKTYKI_TIDY_CANDIDATES)
-
-    # Połącz źródła BEZ ostrzeżeń
-    df = concat_nonempty([df_main, df_pr])
+    df      = concat_nonempty([df_main, df_pr])
 
     st.title("Plan Zajęć ❤️")
 
@@ -264,11 +250,13 @@ try:
     now_dt = datetime.now(timezone.utc).astimezone(TZ_WA)
     today = now_dt.date()
 
-    # Stan sesji (Pon–Pt)
+    # Stan sesji
     if 'current_week_start' not in st.session_state:
         st.session_state.current_week_start = today - timedelta(days=today.weekday())
     if 'selected_day_offset' not in st.session_state:
         st.session_state.selected_day_offset = min(today.weekday(), 4)  # jeśli sob/ndz → Pt
+    if 'calendar_selected_date' not in st.session_state:
+        st.session_state.calendar_selected_date = today
 
     # Nawigacja tygodnia
     week_start = st.session_state.current_week_start
@@ -281,10 +269,41 @@ try:
     if nav_cols[1].button("📍 Dziś", use_container_width=True):
         st.session_state.current_week_start = today - timedelta(days=today.weekday())
         st.session_state.selected_day_offset = min(today.weekday(), 4)
+        st.session_state.calendar_selected_date = today
         st.rerun()
     nav_cols[2].markdown(f"<div class='week-range'>{week_start.strftime('%d.%m')} – {week_end.strftime('%d.%m.%Y')}</div>", unsafe_allow_html=True)
     if nav_cols[3].button("Następny ➡️", use_container_width=True):
         st.session_state.current_week_start += timedelta(days=7)
+        st.rerun()
+
+    # --- 📅 KALENDARZ MIESIĘCZNY (kliknij dzień, skaczemy do niego) ---
+    # Ustal zakres dostępnych dat na podstawie danych
+    if not df.empty and pd.api.types.is_datetime64_any_dtype(df["date"]):
+        min_date = df["date"].min().date()
+        max_date = df["date"].max().date()
+    else:
+        min_date = today - timedelta(days=180)
+        max_date = today + timedelta(days=365)
+
+    # Domyślna wartość = aktualnie oglądany dzień
+    current_selected_dt = week_start + timedelta(days=st.session_state.selected_day_offset)
+    st.session_state.calendar_selected_date = current_selected_dt
+
+    date_selected = st.date_input(
+        "📅 Kalendarz (kliknij dzień)",
+        value=st.session_state.calendar_selected_date,
+        min_value=min_date,
+        max_value=max_date,
+        format="DD.MM.YYYY",
+        help="Wybierz dowolny dzień — przerzucę widok do tego tygodnia i dnia."
+    )
+
+    # Jeśli użytkownik wybrał inny dzień → ustaw tydzień oraz offset i odśwież
+    if date_selected != current_selected_dt:
+        new_week_start = date_selected - timedelta(days=date_selected.weekday())
+        st.session_state.current_week_start = new_week_start
+        st.session_state.selected_day_offset = date_selected.weekday()  # pozwalamy też na sob/ndz
+        st.session_state.calendar_selected_date = date_selected
         st.rerun()
 
     # (opcjonalnie) filtr
@@ -293,7 +312,7 @@ try:
     # Skala pionowa
     PX_PER_MIN = HOUR_HEIGHT_PX / 60.0
 
-    # Zakładki Pon–Pt
+    # Zakładki Pon–Pt (weekendy ukryte jako przyciski, ale można je wybrać z kalendarza)
     days_of_week_pl = ["Pon", "Wt", "Śr", "Czw", "Pt", "Sob", "Niedz"]
     visible_offsets = [0, 1, 2, 3, 4]
     day_tabs = st.columns(len(visible_offsets))
@@ -301,6 +320,7 @@ try:
         current_day_date = week_start + timedelta(days=off)
         if day_tabs[i].button(f"{days_of_week_pl[off]} {current_day_date.day}", use_container_width=True):
             st.session_state.selected_day_offset = off
+            st.session_state.calendar_selected_date = current_day_date
             st.rerun()
 
     # Filtrowanie tylko na bazowym planie
@@ -321,12 +341,11 @@ try:
     # Final: bazowy (po filtrze) + praktyki tidy
     df_all = concat_nonempty([df_src, df_pr])
 
-    # Upewnij się, że 'date' to datetime64[ns]
     if not pd.api.types.is_datetime64_any_dtype(df_all["date"]):
         df_all["date"] = pd.to_datetime(df_all["date"], errors="coerce")
 
-    # Dzień widoku
-    selected_day_date = week_start + timedelta(days=st.session_state.selected_day_offset)
+    # Dzień widoku (po kalendarzu / zakładkach)
+    selected_day_date = st.session_state.current_week_start + timedelta(days=st.session_state.selected_day_offset)
     day_events = df_all[df_all['date'].dt.date == selected_day_date]
 
     st.markdown(f"### {selected_day_date.strftime('%A, %d.%m.%Y')}")
@@ -383,7 +402,6 @@ try:
         })
     events.sort(key=lambda x: (x["start_min"], x["end_min"]))
 
-    # Kolumny + klastry
     def assign_columns_and_clusters_local(evts):
         result = []
         active = []
