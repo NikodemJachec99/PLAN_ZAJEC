@@ -22,3 +22,6 @@ Thumbs.db
 # Env
 .env
 frontend/.env
+
+# Runtime logs
+.runlogs/
