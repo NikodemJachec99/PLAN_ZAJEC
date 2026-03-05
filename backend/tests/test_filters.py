@@ -30,15 +30,16 @@ def test_category_filter_or_within_group() -> None:
     assert set(result["room"]) == {"101", "303"}
 
 
-def test_only_magdalenka_keeps_praktyki_rows() -> None:
+def test_only_magdalenka_filters_all_sources_by_group() -> None:
     frame = _fixture()
     filters = build_filters(only_magdalenka=True)
 
     result = apply_filters(frame, filters)
 
-    assert len(result) == 2
+    assert len(result) == 1
+    assert result["group"].tolist() == ["11"]
     assert "12" not in result["group"].tolist()
-    assert "praktyki" in result["source"].tolist()
+    assert "praktyki" not in result["source"].tolist()
 
 
 def test_only_magdalenka_uses_runtime_configuration() -> None:

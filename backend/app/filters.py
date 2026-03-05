@@ -88,8 +88,7 @@ def apply_filters_with_magdalenka(
     filtered = _apply_category(filtered, "type", filters.type)
 
     if filters.only_magdalenka and not filtered.empty:
-        main_rows = filtered["source"].fillna("").astype(str).str.lower().eq("main")
-        keep_rows = (~main_rows) | filtered["group"].fillna("").astype(str).apply(
+        keep_rows = filtered["group"].fillna("").astype(str).apply(
             lambda value: is_magdalenka_group(
                 value,
                 exact_groups=magdalenka_exact_groups,
