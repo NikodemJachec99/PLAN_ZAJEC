@@ -1,4 +1,13 @@
-import type { ActiveFilters, ApiError, DaySchedule, HealthResponse, MetaResponse, WeekSchedule } from "../types";
+import type {
+  ActiveFilters,
+  ApiError,
+  DaySchedule,
+  HealthResponse,
+  MetaResponse,
+  RuntimeSettings,
+  RuntimeSettingsUpdatePayload,
+  WeekSchedule,
+} from "../types";
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? "http://localhost:8000";
 
@@ -6,11 +15,20 @@ function withBase(path: string): string {
   return `${API_BASE_URL.replace(/\/$/, "")}${path}`;
 }
 
-async function fetchJson<T>(path: string): Promise<T> {
+interface RequestOptions {
+  method?: string;
+  headers?: Record<string, string>;
+  body?: BodyInit | null;
+}
+
+async function requestJson<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const response = await fetch(withBase(path), {
+    method: options.method ?? "GET",
     headers: {
       Accept: "application/json",
+      ...(options.headers ?? {}),
     },
+    body: options.body,
   });
 
   if (!response.ok) {
@@ -45,20 +63,62 @@ function buildFilterQuery(filters: ActiveFilters): string {
   return query ? `&${query}` : "";
 }
 
+function adminHeaders(adminToken: string): Record<string, string> {
+  return { "x-admin-token": adminToken };
+}
+
 export function fetchMeta(): Promise<MetaResponse> {
-  return fetchJson<MetaResponse>("/api/v1/meta");
+  return requestJson<MetaResponse>("/api/v1/meta");
 }
 
 export function fetchHealth(): Promise<HealthResponse> {
-  return fetchJson<HealthResponse>("/api/v1/health");
+  return requestJson<HealthResponse>("/api/v1/health");
 }
 
 export function fetchDaySchedule(date: string, filters: ActiveFilters): Promise<DaySchedule> {
-  return fetchJson<DaySchedule>(`/api/v1/schedule/day?date=${encodeURIComponent(date)}${buildFilterQuery(filters)}`);
+  return requestJson<DaySchedule>(`/api/v1/schedule/day?date=${encodeURIComponent(date)}${buildFilterQuery(filters)}`);
 }
 
 export function fetchWeekSchedule(anchorDate: string, filters: ActiveFilters): Promise<WeekSchedule> {
-  return fetchJson<WeekSchedule>(
+  return requestJson<WeekSchedule>(
     `/api/v1/schedule/week?anchor_date=${encodeURIComponent(anchorDate)}${buildFilterQuery(filters)}`,
   );
+}
+
+export function fetchRuntimeSettings(): Promise<RuntimeSettings> {
+  return requestJson<RuntimeSettings>("/api/v1/settings");
+}
+
+export function updateRuntimeSettings(
+  payload: RuntimeSettingsUpdatePayload,
+  adminToken: string,
+): Promise<RuntimeSettings> {
+  return requestJson<RuntimeSettings>("/api/v1/settings", {
+    method: "PUT",
+    headers: {
+      ...adminHeaders(adminToken),
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function uploadMainScheduleFile(file: File, adminToken: string): Promise<RuntimeSettings> {
+  const formData = new FormData();
+  formData.append("file", file);
+  return requestJson<RuntimeSettings>("/api/v1/settings/files/main", {
+    method: "POST",
+    headers: adminHeaders(adminToken),
+    body: formData,
+  });
+}
+
+export function uploadPracticalScheduleFile(file: File, adminToken: string): Promise<RuntimeSettings> {
+  const formData = new FormData();
+  formData.append("file", file);
+  return requestJson<RuntimeSettings>("/api/v1/settings/files/practical", {
+    method: "POST",
+    headers: adminHeaders(adminToken),
+    body: formData,
+  });
 }

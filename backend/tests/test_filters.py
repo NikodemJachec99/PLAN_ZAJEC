@@ -1,6 +1,6 @@
 import pandas as pd
 
-from app.filters import apply_filters, build_filters
+from app.filters import apply_filters, apply_filters_with_magdalenka, build_filters
 
 
 def _fixture() -> pd.DataFrame:
@@ -39,3 +39,19 @@ def test_only_magdalenka_keeps_praktyki_rows() -> None:
     assert len(result) == 2
     assert "12" not in result["group"].tolist()
     assert "praktyki" in result["source"].tolist()
+
+
+def test_only_magdalenka_uses_runtime_configuration() -> None:
+    frame = _fixture()
+    frame.loc[2, "source"] = "main"
+    frame.loc[2, "group"] = "x1"
+    filters = build_filters(only_magdalenka=True)
+
+    result = apply_filters_with_magdalenka(
+        frame,
+        filters,
+        magdalenka_exact_groups=["x1"],
+        magdalenka_prefixes=["11"],
+    )
+
+    assert "x1" in result["group"].tolist()

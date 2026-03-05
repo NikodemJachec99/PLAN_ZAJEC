@@ -74,3 +74,18 @@ export interface UrlState {
   date: string;
   filters: ActiveFilters;
 }
+
+export interface RuntimeSettings {
+  main_file: string;
+  practical_file: string;
+  magdalenka_exact_groups: string[];
+  magdalenka_prefixes: string[];
+  admin_configured: boolean;
+}
+
+export interface RuntimeSettingsUpdatePayload {
+  main_file?: string;
+  practical_file?: string;
+  magdalenka_exact_groups?: string[];
+  magdalenka_prefixes?: string[];
+}

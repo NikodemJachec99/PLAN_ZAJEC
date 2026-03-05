@@ -1,19 +1,36 @@
 import { useEffect, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import { Sparkles } from "lucide-react";
 
 import { DayTabs } from "./components/DayTabs";
 import { ScheduleBoard } from "./components/ScheduleBoard";
+import { SettingsModal } from "./components/SettingsModal";
 import { WeekNavigator } from "./components/WeekNavigator";
-import { fetchMeta, fetchWeekSchedule } from "./lib/api";
+import {
+  fetchMeta,
+  fetchRuntimeSettings,
+  fetchWeekSchedule,
+  updateRuntimeSettings,
+  uploadMainScheduleFile,
+  uploadPracticalScheduleFile,
+} from "./lib/api";
 import { coerceToWorkday, getTodayInTimezone, shiftDate, startOfWeek } from "./lib/date";
 import { createDefaultFilters, readUrlState, writeUrlState } from "./lib/urlState";
 import type { UrlState } from "./types";
 
 const FALLBACK_TIMEZONE = "Europe/Warsaw";
 
+function parseListInput(value: string): string[] {
+  return value
+    .split(/[\n,;]+/g)
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean);
+}
+
 export default function App() {
+  const queryClient = useQueryClient();
+
   const sanitizeState = (value: UrlState): UrlState => ({
     ...value,
     filters: {
@@ -24,6 +41,15 @@ export default function App() {
 
   const initialDate = coerceToWorkday(getTodayInTimezone(FALLBACK_TIMEZONE));
   const [state, setState] = useState<UrlState>(() => sanitizeState(readUrlState(initialDate)));
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsBusy, setSettingsBusy] = useState(false);
+  const [settingsMessage, setSettingsMessage] = useState<string | null>(null);
+  const [adminToken, setAdminToken] = useState(() => {
+    if (typeof window === "undefined") return "";
+    return localStorage.getItem("plan_settings_admin_token") ?? "";
+  });
+  const [exactGroupsText, setExactGroupsText] = useState("");
+  const [prefixesText, setPrefixesText] = useState("");
 
   useEffect(() => {
     const onPopState = () => {
@@ -38,11 +64,30 @@ export default function App() {
     writeUrlState(state);
   }, [state]);
 
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      localStorage.setItem("plan_settings_admin_token", adminToken);
+    }
+  }, [adminToken]);
+
   const metaQuery = useQuery({
     queryKey: ["meta"],
     queryFn: fetchMeta,
     refetchInterval: 60_000,
   });
+
+  const runtimeSettingsQuery = useQuery({
+    queryKey: ["runtime-settings"],
+    queryFn: fetchRuntimeSettings,
+    refetchInterval: 60_000,
+  });
+
+  useEffect(() => {
+    if (!runtimeSettingsQuery.data) return;
+    if (settingsOpen) return;
+    setExactGroupsText(runtimeSettingsQuery.data.magdalenka_exact_groups.join("\n"));
+    setPrefixesText(runtimeSettingsQuery.data.magdalenka_prefixes.join("\n"));
+  }, [runtimeSettingsQuery.data, settingsOpen]);
 
   const timezone = metaQuery.data?.timezone ?? FALLBACK_TIMEZONE;
 
@@ -56,11 +101,14 @@ export default function App() {
   const weekStart = weekQuery.data?.week_start ?? startOfWeek(state.date);
   const daySchedule = weekQuery.data?.days.find((day) => day.date === state.date) ?? weekQuery.data?.days[0];
 
-  const errorMessage = metaQuery.error instanceof Error
-    ? metaQuery.error.message
-    : weekQuery.error instanceof Error
-      ? weekQuery.error.message
-      : null;
+  const errorMessage =
+    metaQuery.error instanceof Error
+      ? metaQuery.error.message
+      : weekQuery.error instanceof Error
+        ? weekQuery.error.message
+        : runtimeSettingsQuery.error instanceof Error
+          ? runtimeSettingsQuery.error.message
+          : null;
 
   const magdalenkaEnabled = useMemo(() => state.filters.only_magdalenka, [state.filters.only_magdalenka]);
 
@@ -94,6 +142,76 @@ export default function App() {
     updateDate(shiftDate(state.date, 7));
   };
 
+  const refreshScheduleQueries = async () => {
+    await queryClient.invalidateQueries({ queryKey: ["runtime-settings"] });
+    await queryClient.invalidateQueries({ queryKey: ["meta"] });
+    await queryClient.invalidateQueries({ queryKey: ["week"] });
+  };
+
+  const saveRules = async () => {
+    if (!adminToken.trim()) {
+      setSettingsMessage("Uzupelnij token admina.");
+      return;
+    }
+
+    try {
+      setSettingsBusy(true);
+      setSettingsMessage(null);
+      await updateRuntimeSettings(
+        {
+          magdalenka_exact_groups: parseListInput(exactGroupsText),
+          magdalenka_prefixes: parseListInput(prefixesText),
+        },
+        adminToken.trim(),
+      );
+      await refreshScheduleQueries();
+      setSettingsMessage("Ustawienia zapisane.");
+    } catch (error) {
+      setSettingsMessage(error instanceof Error ? error.message : "Nie udalo sie zapisac ustawien.");
+    } finally {
+      setSettingsBusy(false);
+    }
+  };
+
+  const uploadMainFile = async (file: File) => {
+    if (!adminToken.trim()) {
+      setSettingsMessage("Uzupelnij token admina.");
+      return;
+    }
+    try {
+      setSettingsBusy(true);
+      setSettingsMessage(null);
+      await uploadMainScheduleFile(file, adminToken.trim());
+      await refreshScheduleQueries();
+      setSettingsMessage("Wgrano nowy plik planu zajec zwyklych.");
+    } catch (error) {
+      setSettingsMessage(error instanceof Error ? error.message : "Nie udalo sie wgrac pliku.");
+    } finally {
+      setSettingsBusy(false);
+    }
+  };
+
+  const uploadPracticalFile = async (file: File) => {
+    if (!adminToken.trim()) {
+      setSettingsMessage("Uzupelnij token admina.");
+      return;
+    }
+    try {
+      setSettingsBusy(true);
+      setSettingsMessage(null);
+      await uploadPracticalScheduleFile(file, adminToken.trim());
+      await refreshScheduleQueries();
+      setSettingsMessage("Wgrano nowy plik planu praktyk.");
+    } catch (error) {
+      setSettingsMessage(error instanceof Error ? error.message : "Nie udalo sie wgrac pliku.");
+    } finally {
+      setSettingsBusy(false);
+    }
+  };
+
+  const exactLegend = runtimeSettingsQuery.data?.magdalenka_exact_groups?.join(", ") ?? "---, rok, caly rok, wszyscy, d";
+  const prefixLegend = runtimeSettingsQuery.data?.magdalenka_prefixes?.join(", ") ?? "11, wsz";
+
   return (
     <div className="relative min-h-screen overflow-x-hidden bg-linen text-ink">
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_15%_12%,rgba(106,126,112,0.12),transparent_44%),radial-gradient(circle_at_88%_16%,rgba(141,160,177,0.14),transparent_50%),linear-gradient(180deg,#f4f1e9_0%,#f7f6f1_46%,#f1f4f4_100%)]" />
@@ -109,6 +227,10 @@ export default function App() {
           onNextWeek={goNextWeek}
           onToday={goToday}
           onDateChange={updateDate}
+          onOpenSettings={() => {
+            setSettingsMessage(null);
+            setSettingsOpen(true);
+          }}
         />
 
         {errorMessage && (
@@ -144,8 +266,7 @@ export default function App() {
             </div>
             <div className="rounded-xl border border-black/10 bg-white/72 px-3 py-2 text-xs leading-5 text-black/65">
               <span className="font-semibold text-black/72">Legenda przelacznika:</span>{" "}
-              pokazywane sa tylko grupy Magdalenki: caly rok (<code>---</code>, <code>rok</code>, <code>wszyscy</code>),
-              grupa <code>11*</code> (np. <code>11</code>, <code>11A</code>) oraz <code>D</code> bez cyfr.
+              exact: <code>{exactLegend || "-"}</code>; prefixy: <code>{prefixLegend || "-"}</code>.
             </div>
             <div className="rounded-2xl border border-black/10 bg-white/80 p-2.5">
               <DayTabs weekStart={weekStart} selectedDate={state.date} onSelectDate={updateDate} />
@@ -161,10 +282,25 @@ export default function App() {
           {!weekQuery.isLoading && <ScheduleBoard day={daySchedule} timezone={timezone} />}
         </motion.section>
 
-        <footer className="pb-2 pt-1 text-center text-xs font-medium tracking-wide text-black/45">
-          Made with love❤️.
-        </footer>
+        <footer className="pb-2 pt-1 text-center text-xs font-medium tracking-wide text-black/45">Made with love.</footer>
       </main>
+
+      <SettingsModal
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        settings={runtimeSettingsQuery.data}
+        adminToken={adminToken}
+        onAdminTokenChange={setAdminToken}
+        exactGroupsText={exactGroupsText}
+        onExactGroupsTextChange={setExactGroupsText}
+        prefixesText={prefixesText}
+        onPrefixesTextChange={setPrefixesText}
+        onSaveRules={saveRules}
+        onUploadMainFile={uploadMainFile}
+        onUploadPracticalFile={uploadPracticalFile}
+        busy={settingsBusy}
+        message={settingsMessage}
+      />
     </div>
   );
 }

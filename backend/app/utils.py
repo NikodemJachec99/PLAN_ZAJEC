@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, time as dtime
 import hashlib
-from typing import Any
+from typing import Any, Iterable
 
 import pandas as pd
 
@@ -58,18 +58,30 @@ def subject_color_hsl(subject: str) -> str:
     return f"hsl({hue} 74% 44%)"
 
 
-def is_magdalenka_group(group_value: str) -> bool:
+def is_magdalenka_group(
+    group_value: str,
+    *,
+    exact_groups: Iterable[str] | None = None,
+    prefixes: Iterable[str] | None = None,
+) -> bool:
     normalized = (group_value or "").strip().lower()
 
-    if normalized in {"---", "rok", "wszyscy", "all", "year"}:
-        return True
-    if "rok" in normalized or "wsz" in normalized:
+    if not normalized:
+        return False
+
+    exact_set = {
+        str(item).strip().lower()
+        for item in (exact_groups or ("---", "rok", "wszyscy", "all", "year", "cały rok", "caly rok", "d"))
+    }
+    if normalized in exact_set:
         return True
 
-    if any(char.isdigit() for char in normalized):
-        return normalized == "11" or normalized.startswith("11")
+    prefix_values = tuple(str(item).strip().lower() for item in (prefixes or ("11", "wsz")) if str(item).strip())
+    for prefix in prefix_values:
+        if normalized.startswith(prefix):
+            return True
 
-    return normalized == "d" or normalized.startswith("d")
+    return False
 
 
 def normalize_text(value: Any) -> str:

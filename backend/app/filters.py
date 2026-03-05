@@ -63,6 +63,21 @@ def _apply_category(df: pd.DataFrame, column: str, values: tuple[str, ...]) -> p
 
 
 def apply_filters(df: pd.DataFrame, filters: ScheduleFilters) -> pd.DataFrame:
+    return apply_filters_with_magdalenka(
+        df,
+        filters,
+        magdalenka_exact_groups=None,
+        magdalenka_prefixes=None,
+    )
+
+
+def apply_filters_with_magdalenka(
+    df: pd.DataFrame,
+    filters: ScheduleFilters,
+    *,
+    magdalenka_exact_groups: Iterable[str] | None,
+    magdalenka_prefixes: Iterable[str] | None,
+) -> pd.DataFrame:
     filtered = df
 
     filtered = _apply_category(filtered, "subject", filters.subject)
@@ -74,7 +89,13 @@ def apply_filters(df: pd.DataFrame, filters: ScheduleFilters) -> pd.DataFrame:
 
     if filters.only_magdalenka and not filtered.empty:
         main_rows = filtered["source"].fillna("").astype(str).str.lower().eq("main")
-        keep_rows = (~main_rows) | filtered["group"].fillna("").astype(str).apply(is_magdalenka_group)
+        keep_rows = (~main_rows) | filtered["group"].fillna("").astype(str).apply(
+            lambda value: is_magdalenka_group(
+                value,
+                exact_groups=magdalenka_exact_groups,
+                prefixes=magdalenka_prefixes,
+            )
+        )
         filtered = filtered[keep_rows]
 
     return filtered

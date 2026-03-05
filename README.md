@@ -21,6 +21,10 @@ HTTPS jest terminowane przez proxy Mikrusa, kontenery dzialaja po HTTP.
 2. `frontend` (nginx + zbudowany Vite) - wystawiony na hosta: `30225:80`
 
 Nginx serwuje SPA i proxyuje `/api/*` do `backend:8000`.
+Folder `./backend/data` jest montowany do kontenera backendu jako `/app/data`, wiec:
+- uploadowane pliki Excel
+- `runtime_settings.json`
+sa trwale po restarcie/deployu.
 
 ## Pliki deploy
 
@@ -76,7 +80,17 @@ Najwazniejsze zmienne:
 - `ALLOWED_ORIGINS=...` (domeny publiczne + lokalne dev)
 - `CACHE_TTL_SECONDS=60`
 - `TZ=Europe/Warsaw`
+- `SETTINGS_ADMIN_TOKEN=<tajny_token>` (wymagany do zmian plikow/ustawien w panelu)
 - `VITE_API_BASE_URL=` (puste = same-origin, przez nginx `/api`)
+
+## Panel ustawien w UI
+
+W prawym gornym rogu jest ikonka ustawien. Panel pozwala:
+- podmienic plik planu zwyklych zajec,
+- podmienic plik planu praktyk (nowa struktura matrix jest obslugiwana),
+- zmienic reguly filtra `Tylko grupy Magdalenki` (`exact groups` + `prefixy`).
+
+Do zapisu wymagany jest naglowek `x-admin-token`, ktory UI wysyla z pola tokenu w panelu.
 
 ## Przydatne komendy diagnostyczne
 

@@ -4,14 +4,22 @@ from datetime import date
 from functools import lru_cache
 import uuid
 
-from fastapi import Depends, FastAPI, Query, Request
+from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from .config import Settings, get_settings
 from .errors import DataSourceUnavailable
 from .filters import ScheduleFilters, build_filters
-from .models import DaySchedule, ErrorResponse, HealthResponse, MetaResponse, WeekSchedule
+from .models import (
+    DaySchedule,
+    ErrorResponse,
+    HealthResponse,
+    MetaResponse,
+    RuntimeSettingsResponse,
+    RuntimeSettingsUpdateRequest,
+    WeekSchedule,
+)
 from .service import ScheduleService
 
 
@@ -53,9 +61,19 @@ def create_app() -> FastAPI:
         CORSMiddleware,
         allow_origins=settings.allowed_origins,
         allow_credentials=False,
-        allow_methods=["GET", "OPTIONS"],
+        allow_methods=["GET", "POST", "PUT", "OPTIONS"],
         allow_headers=["*"],
     )
+
+    def require_admin_token(
+        service: ScheduleService = Depends(get_service),
+        x_admin_token: str | None = Header(default=None),
+    ) -> None:
+        expected_token = service.settings.settings_admin_token.strip()
+        if not expected_token:
+            raise HTTPException(status_code=503, detail="Brak konfiguracji SETTINGS_ADMIN_TOKEN na backendzie.")
+        if x_admin_token != expected_token:
+            raise HTTPException(status_code=401, detail="Brak autoryzacji do ustawien.")
 
     @app.middleware("http")
     async def request_id_middleware(request: Request, call_next):  # type: ignore[override]
@@ -69,6 +87,11 @@ def create_app() -> FastAPI:
     async def data_source_exception_handler(request: Request, exc: DataSourceUnavailable):
         payload = ErrorResponse(detail=str(exc), request_id=getattr(request.state, "request_id", None))
         return JSONResponse(status_code=503, content=payload.model_dump())
+
+    @app.exception_handler(HTTPException)
+    async def http_exception_handler(request: Request, exc: HTTPException):
+        payload = ErrorResponse(detail=str(exc.detail), request_id=getattr(request.state, "request_id", None))
+        return JSONResponse(status_code=exc.status_code, content=payload.model_dump())
 
     @app.exception_handler(Exception)
     async def unexpected_exception_handler(request: Request, _exc: Exception):
@@ -105,6 +128,50 @@ def create_app() -> FastAPI:
         service: ScheduleService = Depends(get_service),
     ) -> WeekSchedule:
         return service.get_week_schedule(anchor_date=anchor_date, filters=filters)
+
+    @app.get("/api/v1/settings", response_model=RuntimeSettingsResponse)
+    def get_runtime_settings(service: ScheduleService = Depends(get_service)) -> RuntimeSettingsResponse:
+        return service.get_runtime_settings()
+
+    @app.put("/api/v1/settings", response_model=RuntimeSettingsResponse)
+    def update_runtime_settings(
+        payload: RuntimeSettingsUpdateRequest,
+        _: None = Depends(require_admin_token),
+        service: ScheduleService = Depends(get_service),
+    ) -> RuntimeSettingsResponse:
+        try:
+            return service.update_runtime_settings(
+                main_file=payload.main_file,
+                practical_file=payload.practical_file,
+                magdalenka_exact_groups=payload.magdalenka_exact_groups,
+                magdalenka_prefixes=payload.magdalenka_prefixes,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.post("/api/v1/settings/files/main", response_model=RuntimeSettingsResponse)
+    async def upload_main_file(
+        file: UploadFile = File(...),
+        _: None = Depends(require_admin_token),
+        service: ScheduleService = Depends(get_service),
+    ) -> RuntimeSettingsResponse:
+        try:
+            content = await file.read()
+            return service.upload_runtime_file(kind="main", filename=file.filename or "", content=content)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.post("/api/v1/settings/files/practical", response_model=RuntimeSettingsResponse)
+    async def upload_practical_file(
+        file: UploadFile = File(...),
+        _: None = Depends(require_admin_token),
+        service: ScheduleService = Depends(get_service),
+    ) -> RuntimeSettingsResponse:
+        try:
+            content = await file.read()
+            return service.upload_runtime_file(kind="practical", filename=file.filename or "", content=content)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     return app
 

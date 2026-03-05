@@ -63,3 +63,18 @@ class HealthResponse(BaseModel):
 class ErrorResponse(BaseModel):
     detail: str
     request_id: str | None = None
+
+
+class RuntimeSettingsResponse(BaseModel):
+    main_file: str
+    practical_file: str
+    magdalenka_exact_groups: list[str] = Field(default_factory=list)
+    magdalenka_prefixes: list[str] = Field(default_factory=list)
+    admin_configured: bool
+
+
+class RuntimeSettingsUpdateRequest(BaseModel):
+    main_file: str | None = None
+    practical_file: str | None = None
+    magdalenka_exact_groups: list[str] | None = None
+    magdalenka_prefixes: list[str] | None = None

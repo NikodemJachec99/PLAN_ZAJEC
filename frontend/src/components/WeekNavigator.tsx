@@ -1,4 +1,4 @@
-import { CalendarDays, ChevronLeft, ChevronRight, Crosshair } from "lucide-react";
+import { CalendarDays, ChevronLeft, ChevronRight, Crosshair, Settings } from "lucide-react";
 
 import { polishDateLabel, weekRangeLabel } from "../lib/date";
 
@@ -11,6 +11,7 @@ interface WeekNavigatorProps {
   onNextWeek: () => void;
   onToday: () => void;
   onDateChange: (date: string) => void;
+  onOpenSettings: () => void;
 }
 
 export function WeekNavigator({
@@ -22,6 +23,7 @@ export function WeekNavigator({
   onNextWeek,
   onToday,
   onDateChange,
+  onOpenSettings,
 }: WeekNavigatorProps) {
   return (
     <section className="rounded-3xl border border-black/10 bg-gradient-to-br from-white via-sand to-sky p-3 shadow-panel md:p-4">
@@ -31,17 +33,27 @@ export function WeekNavigator({
           <p className="mt-1 text-sm text-black/65">{polishDateLabel(selectedDate)} - tydzien {weekRangeLabel(weekStart)}</p>
         </div>
 
-        <label className="inline-flex items-center justify-between gap-2 rounded-xl border border-black/15 bg-white/70 px-3 py-2 text-sm font-semibold text-ink md:justify-start">
-          <CalendarDays className="h-4 w-4 text-moss" />
-          <input
-            type="date"
-            className="bg-transparent text-sm font-semibold text-ink outline-none"
-            value={selectedDate}
-            min={minDate ?? undefined}
-            max={maxDate ?? undefined}
-            onChange={(event) => onDateChange(event.target.value)}
-          />
-        </label>
+        <div className="flex items-center gap-2">
+          <label className="inline-flex items-center justify-between gap-2 rounded-xl border border-black/15 bg-white/70 px-3 py-2 text-sm font-semibold text-ink md:justify-start">
+            <CalendarDays className="h-4 w-4 text-moss" />
+            <input
+              type="date"
+              className="bg-transparent text-sm font-semibold text-ink outline-none"
+              value={selectedDate}
+              min={minDate ?? undefined}
+              max={maxDate ?? undefined}
+              onChange={(event) => onDateChange(event.target.value)}
+            />
+          </label>
+          <button
+            type="button"
+            onClick={onOpenSettings}
+            className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-black/15 bg-white/70 text-black/75 hover:bg-black/5"
+            aria-label="Ustawienia danych"
+          >
+            <Settings className="h-4 w-4" />
+          </button>
+        </div>
       </div>
 
       <div className="grid grid-cols-2 gap-2 md:grid-cols-4">

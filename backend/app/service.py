@@ -2,16 +2,27 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
 import hashlib
+from pathlib import Path
 import threading
-from typing import Any
+from typing import Any, Literal
 
 import pandas as pd
 
 from .config import Settings
-from .data_loader import PRAKTYKI_CANDIDATES, load_combined_data
-from .filters import ScheduleFilters, apply_filters, extract_filter_values
-from .layout import compute_time_range, assign_columns_and_clusters
-from .models import DaySchedule, FilterOptions, HealthResponse, MetaResponse, ScheduleEvent, WeekSchedule
+from .data_loader import load_combined_data
+from .errors import DataSourceUnavailable
+from .filters import ScheduleFilters, apply_filters_with_magdalenka, extract_filter_values
+from .layout import assign_columns_and_clusters, compute_time_range
+from .models import (
+    DaySchedule,
+    FilterOptions,
+    HealthResponse,
+    MetaResponse,
+    RuntimeSettingsResponse,
+    ScheduleEvent,
+    WeekSchedule,
+)
+from .runtime_settings import RuntimeSettingsData, RuntimeSettingsStore, sanitize_excel_filename
 from .utils import normalize_text, subject_color_hsl, to_minutes
 
 
@@ -24,13 +35,23 @@ class ScheduleService:
         self._last_reload_at: datetime | None = None
         self._fingerprint: str | None = None
 
+        self._settings.data_dir.mkdir(parents=True, exist_ok=True)
+        self._runtime_store = RuntimeSettingsStore(
+            data_dir=self._settings.data_dir,
+            settings_file=self._settings.runtime_settings_file,
+        )
+        self._runtime_data = self._runtime_store.load()
+
     @property
     def settings(self) -> Settings:
         return self._settings
 
     def _tracked_files(self) -> list[Path]:
-        files = [self._settings.data_dir / "plan_zajec.xlsx"]
-        files.extend(self._settings.data_dir / filename for filename in PRAKTYKI_CANDIDATES)
+        files = [
+            self._settings.runtime_settings_file,
+            self._settings.data_dir / self._runtime_data.main_file,
+            self._settings.data_dir / self._runtime_data.practical_file,
+        ]
         return files
 
     def _build_fingerprint(self) -> str:
@@ -51,15 +72,33 @@ class ScheduleService:
     def _needs_reload(self, now: datetime) -> bool:
         if self._frame is None:
             return True
-
         if self._cache_expired(now):
             return True
+        return self._build_fingerprint() != self._fingerprint
 
-        current_fingerprint = self._build_fingerprint()
-        return current_fingerprint != self._fingerprint
+    def _assert_runtime_files(self, runtime_data: RuntimeSettingsData) -> None:
+        main_path = self._settings.data_dir / runtime_data.main_file
+        practical_path = self._settings.data_dir / runtime_data.practical_file
+        if not main_path.exists():
+            raise DataSourceUnavailable(f"Plik glownego planu nie istnieje: {runtime_data.main_file}")
+        if not practical_path.exists():
+            raise DataSourceUnavailable(f"Plik praktyk nie istnieje: {runtime_data.practical_file}")
+
+    def _invalidate_cache_locked(self) -> None:
+        self._frame = None
+        self._last_reload_at = None
+        self._fingerprint = None
 
     def _reload_locked(self) -> None:
-        frame = load_combined_data(self._settings.data_dir)
+        runtime_data = self._runtime_store.load()
+        self._assert_runtime_files(runtime_data)
+
+        frame = load_combined_data(
+            self._settings.data_dir,
+            main_file_name=runtime_data.main_file,
+            practical_file_name=runtime_data.practical_file,
+        )
+        self._runtime_data = runtime_data
         self._frame = frame
         self._last_reload_at = datetime.now(timezone.utc)
         self._fingerprint = self._build_fingerprint()
@@ -74,6 +113,71 @@ class ScheduleService:
                 self._reload_locked()
 
         return self._frame if self._frame is not None else pd.DataFrame()
+
+    def _runtime_response(self) -> RuntimeSettingsResponse:
+        runtime_data = self._runtime_store.load()
+        self._runtime_data = runtime_data
+        return RuntimeSettingsResponse(
+            main_file=runtime_data.main_file,
+            practical_file=runtime_data.practical_file,
+            magdalenka_exact_groups=list(runtime_data.magdalenka_exact_groups),
+            magdalenka_prefixes=list(runtime_data.magdalenka_prefixes),
+            admin_configured=bool(self._settings.settings_admin_token),
+        )
+
+    def get_runtime_settings(self) -> RuntimeSettingsResponse:
+        return self._runtime_response()
+
+    def update_runtime_settings(
+        self,
+        *,
+        main_file: str | None = None,
+        practical_file: str | None = None,
+        magdalenka_exact_groups: list[str] | None = None,
+        magdalenka_prefixes: list[str] | None = None,
+    ) -> RuntimeSettingsResponse:
+        next_data = self._runtime_store.compose(
+            main_file=main_file,
+            practical_file=practical_file,
+            magdalenka_exact_groups=magdalenka_exact_groups,
+            magdalenka_prefixes=magdalenka_prefixes,
+        )
+        try:
+            self._assert_runtime_files(next_data)
+        except DataSourceUnavailable as exc:
+            raise ValueError(str(exc)) from exc
+        self._runtime_store.save(next_data)
+
+        with self._lock:
+            self._runtime_data = next_data
+            self._invalidate_cache_locked()
+            self._reload_locked()
+        return self._runtime_response()
+
+    def upload_runtime_file(
+        self,
+        *,
+        kind: Literal["main", "practical"],
+        filename: str,
+        content: bytes,
+    ) -> RuntimeSettingsResponse:
+        safe_name = sanitize_excel_filename(filename)
+        if not content:
+            raise ValueError("Plik jest pusty.")
+
+        target = self._settings.data_dir / safe_name
+        target.write_bytes(content)
+
+        if kind == "main":
+            updated = self._runtime_store.update(main_file=safe_name)
+        else:
+            updated = self._runtime_store.update(practical_file=safe_name)
+
+        with self._lock:
+            self._runtime_data = updated
+            self._invalidate_cache_locked()
+            self._reload_locked()
+        return self._runtime_response()
 
     def health(self) -> HealthResponse:
         frame = self._ensure_loaded()
@@ -109,7 +213,12 @@ class ScheduleService:
         frame = self._ensure_loaded()
         if frame.empty:
             return frame
-        return apply_filters(frame, filters)
+        return apply_filters_with_magdalenka(
+            frame,
+            filters,
+            magdalenka_exact_groups=self._runtime_data.magdalenka_exact_groups,
+            magdalenka_prefixes=self._runtime_data.magdalenka_prefixes,
+        )
 
     @staticmethod
     def _event_id(payload: str) -> str:
