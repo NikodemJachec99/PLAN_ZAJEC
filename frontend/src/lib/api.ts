@@ -63,8 +63,8 @@ function buildFilterQuery(filters: ActiveFilters): string {
   return query ? `&${query}` : "";
 }
 
-function adminHeaders(adminToken: string): Record<string, string> {
-  return { "x-admin-token": adminToken };
+function passwordHeaders(password: string): Record<string, string> {
+  return { "x-settings-password": password };
 }
 
 export function fetchMeta(): Promise<MetaResponse> {
@@ -91,34 +91,34 @@ export function fetchRuntimeSettings(): Promise<RuntimeSettings> {
 
 export function updateRuntimeSettings(
   payload: RuntimeSettingsUpdatePayload,
-  adminToken: string,
+  password: string,
 ): Promise<RuntimeSettings> {
   return requestJson<RuntimeSettings>("/api/v1/settings", {
     method: "PUT",
     headers: {
-      ...adminHeaders(adminToken),
+      ...passwordHeaders(password),
       "Content-Type": "application/json",
     },
     body: JSON.stringify(payload),
   });
 }
 
-export function uploadMainScheduleFile(file: File, adminToken: string): Promise<RuntimeSettings> {
+export function uploadMainScheduleFile(file: File, password: string): Promise<RuntimeSettings> {
   const formData = new FormData();
   formData.append("file", file);
   return requestJson<RuntimeSettings>("/api/v1/settings/files/main", {
     method: "POST",
-    headers: adminHeaders(adminToken),
+    headers: passwordHeaders(password),
     body: formData,
   });
 }
 
-export function uploadPracticalScheduleFile(file: File, adminToken: string): Promise<RuntimeSettings> {
+export function uploadPracticalScheduleFile(file: File, password: string): Promise<RuntimeSettings> {
   const formData = new FormData();
   formData.append("file", file);
   return requestJson<RuntimeSettings>("/api/v1/settings/files/practical", {
     method: "POST",
-    headers: adminHeaders(adminToken),
+    headers: passwordHeaders(password),
     body: formData,
   });
 }

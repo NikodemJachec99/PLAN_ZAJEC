@@ -70,7 +70,6 @@ class RuntimeSettingsResponse(BaseModel):
     practical_file: str
     magdalenka_exact_groups: list[str] = Field(default_factory=list)
     magdalenka_prefixes: list[str] = Field(default_factory=list)
-    admin_configured: bool
 
 
 class RuntimeSettingsUpdateRequest(BaseModel):

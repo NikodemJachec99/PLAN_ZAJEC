@@ -44,9 +44,9 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsBusy, setSettingsBusy] = useState(false);
   const [settingsMessage, setSettingsMessage] = useState<string | null>(null);
-  const [adminToken, setAdminToken] = useState(() => {
+  const [settingsPassword, setSettingsPassword] = useState(() => {
     if (typeof window === "undefined") return "";
-    return localStorage.getItem("plan_settings_admin_token") ?? "";
+    return localStorage.getItem("plan_settings_password") ?? "Pielęgniarstwo";
   });
   const [exactGroupsText, setExactGroupsText] = useState("");
   const [prefixesText, setPrefixesText] = useState("");
@@ -66,9 +66,9 @@ export default function App() {
 
   useEffect(() => {
     if (typeof window !== "undefined") {
-      localStorage.setItem("plan_settings_admin_token", adminToken);
+      localStorage.setItem("plan_settings_password", settingsPassword);
     }
-  }, [adminToken]);
+  }, [settingsPassword]);
 
   const metaQuery = useQuery({
     queryKey: ["meta"],
@@ -149,8 +149,8 @@ export default function App() {
   };
 
   const saveRules = async () => {
-    if (!adminToken.trim()) {
-      setSettingsMessage("Uzupelnij token admina.");
+    if (!settingsPassword.trim()) {
+      setSettingsMessage("Uzupelnij haslo ustawien.");
       return;
     }
 
@@ -162,7 +162,7 @@ export default function App() {
           magdalenka_exact_groups: parseListInput(exactGroupsText),
           magdalenka_prefixes: parseListInput(prefixesText),
         },
-        adminToken.trim(),
+        settingsPassword.trim(),
       );
       await refreshScheduleQueries();
       setSettingsMessage("Ustawienia zapisane.");
@@ -174,14 +174,14 @@ export default function App() {
   };
 
   const uploadMainFile = async (file: File) => {
-    if (!adminToken.trim()) {
-      setSettingsMessage("Uzupelnij token admina.");
+    if (!settingsPassword.trim()) {
+      setSettingsMessage("Uzupelnij haslo ustawien.");
       return;
     }
     try {
       setSettingsBusy(true);
       setSettingsMessage(null);
-      await uploadMainScheduleFile(file, adminToken.trim());
+      await uploadMainScheduleFile(file, settingsPassword.trim());
       await refreshScheduleQueries();
       setSettingsMessage("Wgrano nowy plik planu zajec zwyklych.");
     } catch (error) {
@@ -192,14 +192,14 @@ export default function App() {
   };
 
   const uploadPracticalFile = async (file: File) => {
-    if (!adminToken.trim()) {
-      setSettingsMessage("Uzupelnij token admina.");
+    if (!settingsPassword.trim()) {
+      setSettingsMessage("Uzupelnij haslo ustawien.");
       return;
     }
     try {
       setSettingsBusy(true);
       setSettingsMessage(null);
-      await uploadPracticalScheduleFile(file, adminToken.trim());
+      await uploadPracticalScheduleFile(file, settingsPassword.trim());
       await refreshScheduleQueries();
       setSettingsMessage("Wgrano nowy plik planu praktyk.");
     } catch (error) {
@@ -289,8 +289,8 @@ export default function App() {
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
         settings={runtimeSettingsQuery.data}
-        adminToken={adminToken}
-        onAdminTokenChange={setAdminToken}
+        settingsPassword={settingsPassword}
+        onSettingsPasswordChange={setSettingsPassword}
         exactGroupsText={exactGroupsText}
         onExactGroupsTextChange={setExactGroupsText}
         prefixesText={prefixesText}

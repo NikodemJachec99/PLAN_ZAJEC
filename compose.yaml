@@ -9,7 +9,7 @@ services:
       CACHE_TTL_SECONDS: ${CACHE_TTL_SECONDS:-60}
       TZ: ${TZ:-Europe/Warsaw}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-https://patryk225-30225.wykr.es,https://patryk225-30225.mikrus.cloud,http://localhost:5173,http://127.0.0.1:5173}
-      SETTINGS_ADMIN_TOKEN: ${SETTINGS_ADMIN_TOKEN:-}
+      SETTINGS_PASSWORD: ${SETTINGS_PASSWORD:-Pielęgniarstwo}
       RUNTIME_SETTINGS_FILE: /app/data/runtime_settings.json
     volumes:
       - ./backend/data:/app/data

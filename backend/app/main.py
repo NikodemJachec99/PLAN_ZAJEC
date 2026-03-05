@@ -65,15 +65,13 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    def require_admin_token(
+    def require_settings_password(
         service: ScheduleService = Depends(get_service),
-        x_admin_token: str | None = Header(default=None),
+        x_settings_password: str | None = Header(default=None),
     ) -> None:
-        expected_token = service.settings.settings_admin_token.strip()
-        if not expected_token:
-            raise HTTPException(status_code=503, detail="Brak konfiguracji SETTINGS_ADMIN_TOKEN na backendzie.")
-        if x_admin_token != expected_token:
-            raise HTTPException(status_code=401, detail="Brak autoryzacji do ustawien.")
+        expected_password = service.settings.settings_password
+        if x_settings_password != expected_password:
+            raise HTTPException(status_code=401, detail="Nieprawidlowe haslo ustawien.")
 
     @app.middleware("http")
     async def request_id_middleware(request: Request, call_next):  # type: ignore[override]
@@ -136,7 +134,7 @@ def create_app() -> FastAPI:
     @app.put("/api/v1/settings", response_model=RuntimeSettingsResponse)
     def update_runtime_settings(
         payload: RuntimeSettingsUpdateRequest,
-        _: None = Depends(require_admin_token),
+        _: None = Depends(require_settings_password),
         service: ScheduleService = Depends(get_service),
     ) -> RuntimeSettingsResponse:
         try:
@@ -152,7 +150,7 @@ def create_app() -> FastAPI:
     @app.post("/api/v1/settings/files/main", response_model=RuntimeSettingsResponse)
     async def upload_main_file(
         file: UploadFile = File(...),
-        _: None = Depends(require_admin_token),
+        _: None = Depends(require_settings_password),
         service: ScheduleService = Depends(get_service),
     ) -> RuntimeSettingsResponse:
         try:
@@ -164,7 +162,7 @@ def create_app() -> FastAPI:
     @app.post("/api/v1/settings/files/practical", response_model=RuntimeSettingsResponse)
     async def upload_practical_file(
         file: UploadFile = File(...),
-        _: None = Depends(require_admin_token),
+        _: None = Depends(require_settings_password),
         service: ScheduleService = Depends(get_service),
     ) -> RuntimeSettingsResponse:
         try:

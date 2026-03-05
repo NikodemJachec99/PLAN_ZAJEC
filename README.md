@@ -80,7 +80,7 @@ Najwazniejsze zmienne:
 - `ALLOWED_ORIGINS=...` (domeny publiczne + lokalne dev)
 - `CACHE_TTL_SECONDS=60`
 - `TZ=Europe/Warsaw`
-- `SETTINGS_ADMIN_TOKEN=<tajny_token>` (wymagany do zmian plikow/ustawien w panelu)
+- `SETTINGS_PASSWORD=Pielęgniarstwo` (haslo do zmian plikow/ustawien w panelu)
 - `VITE_API_BASE_URL=` (puste = same-origin, przez nginx `/api`)
 
 ## Panel ustawien w UI
@@ -90,7 +90,7 @@ W prawym gornym rogu jest ikonka ustawien. Panel pozwala:
 - podmienic plik planu praktyk (nowa struktura matrix jest obslugiwana),
 - zmienic reguly filtra `Tylko grupy Magdalenki` (`exact groups` + `prefixy`).
 
-Do zapisu wymagany jest naglowek `x-admin-token`, ktory UI wysyla z pola tokenu w panelu.
+Do zapisu wymagany jest naglowek `x-settings-password`, ktory UI wysyla z pola hasla w panelu.
 
 ## Przydatne komendy diagnostyczne
 

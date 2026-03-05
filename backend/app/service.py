@@ -122,7 +122,6 @@ class ScheduleService:
             practical_file=runtime_data.practical_file,
             magdalenka_exact_groups=list(runtime_data.magdalenka_exact_groups),
             magdalenka_prefixes=list(runtime_data.magdalenka_prefixes),
-            admin_configured=bool(self._settings.settings_admin_token),
         )
 
     def get_runtime_settings(self) -> RuntimeSettingsResponse:

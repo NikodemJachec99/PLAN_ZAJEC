@@ -12,7 +12,7 @@ class Settings:
     cache_ttl_seconds: int
     timezone: str
     allowed_origins: list[str]
-    settings_admin_token: str
+    settings_password: str
     runtime_settings_file: Path
 
 
@@ -33,7 +33,7 @@ def get_settings() -> Settings:
 
     timezone = os.getenv("TZ", "Europe/Warsaw")
     allowed_origins = _parse_origins(os.getenv("ALLOWED_ORIGINS", "http://localhost:5173"))
-    settings_admin_token = os.getenv("SETTINGS_ADMIN_TOKEN", "").strip()
+    settings_password = os.getenv("SETTINGS_PASSWORD", "Pielęgniarstwo").strip() or "Pielęgniarstwo"
     runtime_settings_file = Path(
         os.getenv("RUNTIME_SETTINGS_FILE", str(data_dir / "runtime_settings.json"))
     ).resolve()
@@ -43,6 +43,6 @@ def get_settings() -> Settings:
         cache_ttl_seconds=max(cache_ttl_seconds, 1),
         timezone=timezone,
         allowed_origins=allowed_origins,
-        settings_admin_token=settings_admin_token,
+        settings_password=settings_password,
         runtime_settings_file=runtime_settings_file,
     )

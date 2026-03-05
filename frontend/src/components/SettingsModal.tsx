@@ -7,8 +7,8 @@ interface SettingsModalProps {
   open: boolean;
   onClose: () => void;
   settings?: RuntimeSettings;
-  adminToken: string;
-  onAdminTokenChange: (value: string) => void;
+  settingsPassword: string;
+  onSettingsPasswordChange: (value: string) => void;
   exactGroupsText: string;
   onExactGroupsTextChange: (value: string) => void;
   prefixesText: string;
@@ -31,8 +31,8 @@ export function SettingsModal({
   open,
   onClose,
   settings,
-  adminToken,
-  onAdminTokenChange,
+  settingsPassword,
+  onSettingsPasswordChange,
   exactGroupsText,
   onExactGroupsTextChange,
   prefixesText,
@@ -46,7 +46,7 @@ export function SettingsModal({
   const [mainFile, setMainFile] = useState<File | null>(null);
   const [practicalFile, setPracticalFile] = useState<File | null>(null);
 
-  const canSubmit = useMemo(() => adminToken.trim().length > 0 && !busy, [adminToken, busy]);
+  const canSubmit = useMemo(() => settingsPassword.trim().length > 0 && !busy, [settingsPassword, busy]);
 
   if (!open) {
     return null;
@@ -79,17 +79,14 @@ export function SettingsModal({
 
         <div className="space-y-4">
           <section className="rounded-2xl border border-black/10 bg-white/70 p-3">
-            <p className="text-xs font-semibold uppercase tracking-[0.15em] text-black/45">Autoryzacja</p>
+            <p className="text-xs font-semibold uppercase tracking-[0.15em] text-black/45">Haslo ustawien</p>
             <input
               type="password"
-              placeholder="Wklej SETTINGS_ADMIN_TOKEN"
+              placeholder="Wpisz haslo"
               className="mt-2 w-full rounded-xl border border-black/15 bg-white px-3 py-2 text-sm outline-none focus:border-moss"
-              value={adminToken}
-              onChange={(event) => onAdminTokenChange(event.target.value)}
+              value={settingsPassword}
+              onChange={(event) => onSettingsPasswordChange(event.target.value)}
             />
-            {!settings?.admin_configured && (
-              <p className="mt-2 text-xs font-semibold text-red-600">Backend nie ma ustawionego SETTINGS_ADMIN_TOKEN.</p>
-            )}
           </section>
 
           <section className="grid gap-3 md:grid-cols-2">

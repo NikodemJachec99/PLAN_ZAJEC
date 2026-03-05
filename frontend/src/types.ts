@@ -80,7 +80,6 @@ export interface RuntimeSettings {
   practical_file: string;
   magdalenka_exact_groups: string[];
   magdalenka_prefixes: string[];
-  admin_configured: boolean;
 }
 
 export interface RuntimeSettingsUpdatePayload {
