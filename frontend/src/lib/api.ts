@@ -64,7 +64,8 @@ function buildFilterQuery(filters: ActiveFilters): string {
 }
 
 function passwordHeaders(password: string): Record<string, string> {
-  return { "x-settings-password": password };
+  // Encode to ASCII-safe header value; backend decodes before comparing.
+  return { "x-settings-password": encodeURIComponent(password) };
 }
 
 export function fetchMeta(): Promise<MetaResponse> {

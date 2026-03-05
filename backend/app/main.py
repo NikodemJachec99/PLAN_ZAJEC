@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date
 from functools import lru_cache
+from urllib.parse import unquote
 import uuid
 
 from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, Request, UploadFile
@@ -70,7 +71,8 @@ def create_app() -> FastAPI:
         x_settings_password: str | None = Header(default=None),
     ) -> None:
         expected_password = service.settings.settings_password
-        if x_settings_password != expected_password:
+        provided_password = unquote(x_settings_password or "")
+        if provided_password != expected_password:
             raise HTTPException(status_code=401, detail="Nieprawidlowe haslo ustawien.")
 
     @app.middleware("http")
