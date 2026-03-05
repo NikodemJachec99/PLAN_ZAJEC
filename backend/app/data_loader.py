@@ -5,6 +5,7 @@ from pathlib import Path
 import re
 import unicodedata
 
+import openpyxl
 import pandas as pd
 
 from .errors import DataSourceUnavailable
@@ -235,6 +236,7 @@ def _extract_praktyki_legend(matrix: pd.DataFrame) -> dict[str, dict[str, str]]:
         code_value = normalize_text(matrix.iat[row, 1])
         subject_value = normalize_text(matrix.iat[row, 3])
         oddzial_value = normalize_text(matrix.iat[row, 16]) if max_cols > 16 else ""
+        time_range_value = normalize_text(matrix.iat[row, 18]) if max_cols > 18 else ""
         room_value = normalize_text(matrix.iat[row, 22]) if max_cols > 22 else ""
         instructor_value = normalize_text(matrix.iat[row, 31]) if max_cols > 31 else ""
 
@@ -244,6 +246,7 @@ def _extract_praktyki_legend(matrix: pd.DataFrame) -> dict[str, dict[str, str]]:
         payload = {
             "subject": subject_value,
             "oddzial": oddzial_value,
+            "time_range": time_range_value,
             "room": room_value,
             "instructor": instructor_value,
             "type": type_value or "ZP",
@@ -279,6 +282,79 @@ def _parse_cell_content(raw_value: str) -> tuple[str, str, str]:
     return text, start_raw, end_raw
 
 
+def _parse_time_range(raw_value: str) -> tuple[dtime | None, dtime | None]:
+    text = normalize_text(raw_value)
+    if not text:
+        return None, None
+
+    match = re.search(r"(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})", text)
+    if not match:
+        return None, None
+
+    start_obj = parse_time_value(match.group(1))
+    end_obj = parse_time_value(match.group(2))
+    return start_obj, end_obj
+
+
+def _style_key(underline: str | None, strike: bool) -> str:
+    if strike:
+        return "strike"
+    if underline:
+        return str(underline).lower()
+    return "none"
+
+
+def _extract_style_map(path: Path) -> dict[tuple[int, int], tuple[str | None, bool]]:
+    workbook = openpyxl.load_workbook(path, data_only=True)
+    worksheet = workbook.active
+    style_map: dict[tuple[int, int], tuple[str | None, bool]] = {}
+    for row in worksheet.iter_rows(min_row=1, max_row=worksheet.max_row, min_col=1, max_col=worksheet.max_column):
+        for cell in row:
+            if cell.value is None:
+                continue
+            style_map[(cell.row - 1, cell.column - 1)] = (cell.font.underline, bool(cell.font.strike))
+    return style_map
+
+
+def _extract_row31_time_profiles(
+    matrix: pd.DataFrame,
+    style_map: dict[tuple[int, int], tuple[str | None, bool]],
+) -> list[dict[str, object]]:
+    row_idx = 30  # Excel row 31
+    if row_idx >= matrix.shape[0]:
+        return []
+
+    profiles: list[dict[str, object]] = []
+    for col_idx in range(matrix.shape[1]):
+        value = normalize_text(matrix.iat[row_idx, col_idx])
+        start_obj, end_obj = _parse_time_range(value)
+        if start_obj is None or end_obj is None:
+            continue
+
+        marker_style = "none"
+        for marker_col in range(col_idx - 1, -1, -1):
+            marker_value = normalize_text(matrix.iat[row_idx, marker_col])
+            if not marker_value:
+                continue
+            marker_start, marker_end = _parse_time_range(marker_value)
+            if marker_start is not None and marker_end is not None:
+                continue
+            underline, strike = style_map.get((row_idx, marker_col), (None, False))
+            marker_style = _style_key(underline, strike)
+            break
+
+        profiles.append(
+            {
+                "col": col_idx,
+                "style": marker_style,
+                "start": start_obj,
+                "end": end_obj,
+            }
+        )
+
+    return profiles
+
+
 def _derive_lookup_key(token_text: str, legend: dict[str, dict[str, str]]) -> tuple[str, str]:
     if not token_text:
         return "", ""
@@ -297,16 +373,34 @@ def _derive_lookup_key(token_text: str, legend: dict[str, dict[str, str]]) -> tu
     return first, room_override
 
 
-def _build_praktyki_from_matrix(matrix: pd.DataFrame) -> pd.DataFrame:
+def _build_praktyki_from_matrix(
+    matrix: pd.DataFrame,
+    *,
+    style_map: dict[tuple[int, int], tuple[str | None, bool]] | None = None,
+    row31_profiles: list[dict[str, object]] | None = None,
+) -> pd.DataFrame:
     date_columns = _extract_matrix_date_columns(matrix)
     if not date_columns:
         raise DataSourceUnavailable("Nie rozpoznano kolumn dat w pliku praktyk.")
 
     legend = _extract_praktyki_legend(matrix)
+    style_lookup = style_map or {}
+    profiles = row31_profiles or []
 
     rows: list[dict[str, object]] = []
     current_major_group = ""
     for row_idx in range(5, matrix.shape[0]):
+        left_marker = normalize_text(matrix.iat[row_idx, 0]) if matrix.shape[1] > 0 else ""
+        right_marker = normalize_text(matrix.iat[row_idx, 1]) if matrix.shape[1] > 1 else ""
+        if not left_marker and not right_marker:
+            row_text = " ".join(
+                normalize_text(matrix.iat[row_idx, col_idx])
+                for col_idx in range(2, min(matrix.shape[1], 16))
+                if normalize_text(matrix.iat[row_idx, col_idx])
+            )
+            if "godz." in _ascii_lower(row_text):
+                break
+
         type_marker = _ascii_lower(normalize_text(matrix.iat[row_idx, 0]))
         maybe_subject_header = _ascii_lower(normalize_text(matrix.iat[row_idx, 5])) if matrix.shape[1] > 5 else ""
         if type_marker.startswith("zp") or maybe_subject_header == "przedmiot":
@@ -343,8 +437,28 @@ def _build_praktyki_from_matrix(matrix: pd.DataFrame) -> pd.DataFrame:
             lookup_key, room_override = _derive_lookup_key(token_text, legend)
             lookup = legend.get(lookup_key, {})
 
-            start_obj = parse_time_value(start_raw) if start_raw else dtime(7, 0)
-            end_obj = parse_time_value(end_raw) if end_raw else dtime(21, 0)
+            start_obj = parse_time_value(start_raw) if start_raw else None
+            end_obj = parse_time_value(end_raw) if end_raw else None
+
+            if start_obj is None or end_obj is None:
+                legend_start, legend_end = _parse_time_range(normalize_text(lookup.get("time_range")))
+                start_obj = start_obj or legend_start
+                end_obj = end_obj or legend_end
+
+            if (start_obj is None or end_obj is None) and profiles:
+                underline, strike = style_lookup.get((row_idx, col_index), (None, False))
+                cell_style = _style_key(underline, strike)
+                matching = [profile for profile in profiles if profile["style"] == cell_style]
+                candidates = matching if matching else profiles
+                nearest = min(candidates, key=lambda profile: abs(int(profile["col"]) - col_index))
+                if start_obj is None:
+                    start_obj = nearest["start"]  # type: ignore[assignment]
+                if end_obj is None:
+                    end_obj = nearest["end"]  # type: ignore[assignment]
+
+            if start_obj is None or end_obj is None:
+                start_obj = dtime(7, 0)
+                end_obj = dtime(21, 0)
             if start_obj is None or end_obj is None:
                 continue
 
@@ -424,7 +538,9 @@ def _load_praktyki_tidy(path: Path) -> pd.DataFrame:
             return df[OUTPUT_COLUMNS].sort_values(by=["date", "start_time_obj"], na_position="last")
 
         matrix = pd.read_excel(path, header=None)
-        return _build_praktyki_from_matrix(matrix)
+        style_map = _extract_style_map(path)
+        row31_profiles = _extract_row31_time_profiles(matrix, style_map)
+        return _build_praktyki_from_matrix(matrix, style_map=style_map, row31_profiles=row31_profiles)
     except Exception as exc:
         raise DataSourceUnavailable(f"Nie udalo sie odczytac pliku {path.name}: {exc}") from exc
 
