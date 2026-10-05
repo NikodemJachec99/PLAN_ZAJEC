@@ -16,3 +16,7 @@ frontend/dist
 *.log
 *.tmp
 
+
+# Runtime data of a local backend run
+backend/data/sources
+backend/data/runtime_settings.json

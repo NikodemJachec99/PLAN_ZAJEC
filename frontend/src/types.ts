@@ -1,90 +1,102 @@
-export type FilterCategory = "subject" | "instructor" | "room" | "group" | "oddzial" | "type";
+export type Mode = "onsite" | "remote" | "unassigned";
 
-export interface FilterOptions {
-  subject: string[];
-  instructor: string[];
-  room: string[];
-  group: string[];
-  oddzial: string[];
-  type: string[];
-}
-
-export interface MetaResponse {
-  timezone: string;
-  min_date: string | null;
-  max_date: string | null;
-  filters: FilterOptions;
-}
-
-export interface ScheduleEvent {
+export interface PlanEvent {
   id: string;
   date: string;
-  start_time: string;
-  end_time: string;
-  start_min: number;
-  end_min: number;
+  start: string;
+  end: string;
+  parts: [string, string][];
   subject: string;
+  subject_key: string;
+  kind: "class" | "practical";
+  type: string;
+  type_label: string;
+  type_short: string;
   instructor: string;
   room: string;
+  code: string;
+  dept: string;
+  where: string;
+  where_short: string;
+  place: string;
+  mode: Mode;
   group: string;
-  oddzial: string;
-  type: string;
+  groups: string[];
+  note: string;
+  cancelled: boolean;
+  time_uncertain: boolean;
+  csm: boolean;
   source: string;
-  layout_col: number;
-  layout_cols_total: number;
-  color_hsl: string;
 }
 
-export interface DaySchedule {
-  date: string;
-  range_start_min: number;
-  range_end_min: number;
-  events: ScheduleEvent[];
+export interface Subject {
+  key: string;
+  name: string;
+  short: string;
+  hue: number | null;
 }
 
-export interface WeekSchedule {
-  week_start: string;
-  week_end: string;
-  days: DaySchedule[];
+export interface Dimension {
+  id: string;
+  label: string;
+  options: string[];
 }
 
-export interface HealthResponse {
-  status: string;
-  last_reload_at: string | null;
-  cache_ttl_seconds: number;
-  records: number;
+export interface SourceInfo {
+  id: string;
+  kind: "main" | "practical";
+  label: string;
+  name: string;
+  url: string;
+  origin: "site" | "seed" | "manual";
+  sha256: string;
+  as_of: string | null;
+  fetched_at: string | null;
+  last_modified: string | null;
+  events: number;
+  stale: boolean;
+  warnings: string[];
 }
 
-export interface ApiError {
-  detail: string;
-  request_id?: string;
+export interface PlanMeta {
+  year: string;
+  level: string;
+  academic_year: string;
+  semester: string;
+  notes: string[];
 }
 
-export interface ActiveFilters {
-  subject: string[];
-  instructor: string[];
-  room: string[];
-  group: string[];
-  oddzial: string[];
-  type: string[];
-  only_magdalenka: boolean;
+export interface Plan {
+  version: string;
+  generated_at: string;
+  meta: PlanMeta;
+  sources: SourceInfo[];
+  subjects: Subject[];
+  dimensions: Dimension[];
+  events: PlanEvent[];
 }
 
-export interface UrlState {
-  date: string;
-  filters: ActiveFilters;
+export interface SyncInfo {
+  page_url: string;
+  interval_seconds: number;
+  last_checked_at: string | null;
+  last_success_at: string | null;
+  last_changed_at: string | null;
+  last_error: string | null;
+  last_error_at: string | null;
+  consecutive_failures: number;
+  links_found: number;
+  running: boolean;
+  healthy: boolean;
 }
 
-export interface RuntimeSettings {
-  main_file: string;
-  practical_file: string;
-  magdalenka_exact_groups: string[];
-  magdalenka_prefixes: string[];
+export interface Status {
+  version: string | null;
+  now: string;
+  sync: SyncInfo;
+  sources: SourceInfo[];
 }
 
-export interface RuntimeSettingsUpdatePayload {
-  main_file?: string;
-  practical_file?: string;
-  magdalenka_exact_groups?: string[];
-  magdalenka_prefixes?: string[];
-}
+export type Selection = Record<string, string>;
+
+export type View = "dzień" | "tydzień" | "kalendarz" | "lista";

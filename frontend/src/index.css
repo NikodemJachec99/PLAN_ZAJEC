@@ -1,5 +1,3 @@
-@import url("https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@500;700;800&family=Manrope:wght@400;500;600;700;800&display=swap");
-
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -15,26 +13,54 @@
 body {
   margin: 0;
   min-width: 320px;
+  background: #f4efe3;
+  color: #12110f;
   font-family: "Manrope", sans-serif;
+  -webkit-font-smoothing: antialiased;
 }
 
-h1,
-h2,
-h3,
-h4 {
-  font-family: "Bricolage Grotesque", sans-serif;
+button {
+  font-family: inherit;
 }
 
-::-webkit-scrollbar {
-  width: 9px;
-  height: 9px;
+a {
+  color: #cc5c2d;
 }
 
-::-webkit-scrollbar-track {
-  background: rgba(0, 0, 0, 0.06);
+a:hover {
+  color: #355f48;
 }
 
-::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.25);
-  border-radius: 9999px;
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+.text-pretty {
+  text-wrap: pretty;
+}
+
+.text-balance {
+  text-wrap: balance;
+}
+
+.clamp-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 12px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+.toast-in {
+  animation: toast-in 0.2s ease-out;
 }
