@@ -6,11 +6,13 @@ services:
     restart: unless-stopped
     environment:
       DATA_DIR: /app/data
-      CACHE_TTL_SECONDS: ${CACHE_TTL_SECONDS:-60}
       TZ: ${TZ:-Europe/Warsaw}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-https://patryk225-30225.wykr.es,https://patryk225-30225.mikrus.cloud,http://localhost:5173,http://127.0.0.1:5173}
-      SETTINGS_PASSWORD: ${SETTINGS_PASSWORD:-Pielęgniarstwo}
-      RUNTIME_SETTINGS_FILE: /app/data/runtime_settings.json
+      # Strona wydziału, z której co kilka minut pobierane są pliki planu.
+      SOURCE_PAGE_URL: ${SOURCE_PAGE_URL:-https://wnoz.uni.opole.pl/plan-pielegniarstwo-i-stopnia-iii-rok-stacjonarne-1/}
+      SYNC_INTERVAL_SECONDS: ${SYNC_INTERVAL_SECONDS:-300}
+      # Puste = ręczne wgrywanie plików wyłączone (automatyczna synchronizacja działa zawsze).
+      SETTINGS_PASSWORD: ${SETTINGS_PASSWORD:-}
     volumes:
       - ./backend/data:/app/data
     healthcheck:

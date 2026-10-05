@@ -25,3 +25,7 @@ frontend/.env
 
 # Runtime logs
 .runlogs/
+
+# Runtime data written by the backend (downloaded plan files, sync state)
+backend/data/sources/
+backend/data/runtime_settings.json

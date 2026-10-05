@@ -1,306 +1,374 @@
-import { useEffect, useMemo, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { motion } from "framer-motion";
-import { Sparkles } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 
-import { DayTabs } from "./components/DayTabs";
-import { ScheduleBoard } from "./components/ScheduleBoard";
-import { SettingsModal } from "./components/SettingsModal";
-import { WeekNavigator } from "./components/WeekNavigator";
+import { DayView } from "./components/DayView";
+import { GroupPicker } from "./components/GroupPicker";
+import { Header } from "./components/Header";
+import { ListView } from "./components/ListView";
+import { MonthView } from "./components/MonthView";
+import { Navigator } from "./components/Navigator";
+import { Notices, Toast } from "./components/Notices";
+import { Overview, type Stat } from "./components/Overview";
+import { Toolbar } from "./components/Toolbar";
+import { WeekView, type WeekColumn } from "./components/WeekView";
+import { calendarUrl, fetchPlan, fetchStatus, requestSync } from "./lib/api";
+import { decorate, hourRange, loadSelection, matches, saveSelection, selectionLabel, type Item } from "./lib/model";
+import { readJson, writeStorage } from "./lib/storage";
 import {
-  fetchMeta,
-  fetchRuntimeSettings,
-  fetchWeekSchedule,
-  updateRuntimeSettings,
-  uploadMainScheduleFile,
-  uploadPracticalScheduleFile,
-} from "./lib/api";
-import { coerceToWorkday, getTodayInTimezone, shiftDate, startOfWeek } from "./lib/date";
-import { createDefaultFilters, readUrlState, writeUrlState } from "./lib/urlState";
-import type { UrlState } from "./types";
+  clock,
+  dayLong,
+  fmtHours,
+  isoDay,
+  isWeekend,
+  MONG,
+  mondayOf,
+  nowInWarsaw,
+  parseDay,
+  plural,
+  shift,
+  shortDate,
+  WD,
+  WDL,
+} from "./lib/time";
+import type { Plan, Selection, View } from "./types";
 
-const FALLBACK_TIMEZONE = "Europe/Warsaw";
+const PLAN_CACHE_KEY = "planzp-plan-cache-v2";
+const STATUS_POLL_MS = 60_000;
 
-function parseListInput(value: string): string[] {
-  return value
-    .split(/[\n,;]+/g)
-    .map((item) => item.trim().toLowerCase())
-    .filter(Boolean);
+function useNow() {
+  const [now, setNow] = useState(nowInWarsaw);
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(nowInWarsaw()), 30_000);
+    return () => window.clearInterval(id);
+  }, []);
+  return now;
 }
 
 export default function App() {
-  const queryClient = useQueryClient();
+  const now = useNow();
+  const today = now.today;
+  const cachedPlan = useMemo(() => readJson<Plan>(PLAN_CACHE_KEY), []);
 
-  const sanitizeState = (value: UrlState): UrlState => ({
-    ...value,
-    filters: {
-      ...createDefaultFilters(),
-      only_magdalenka: value.filters.only_magdalenka,
-    },
+  const planQuery = useQuery({
+    queryKey: ["plan"],
+    queryFn: fetchPlan,
+    initialData: cachedPlan ?? undefined,
+    initialDataUpdatedAt: 0,
+    refetchOnWindowFocus: false,
+  });
+  const statusQuery = useQuery({
+    queryKey: ["status"],
+    queryFn: fetchStatus,
+    refetchInterval: STATUS_POLL_MS,
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
   });
 
-  const initialDate = coerceToWorkday(getTodayInTimezone(FALLBACK_TIMEZONE));
-  const [state, setState] = useState<UrlState>(() => sanitizeState(readUrlState(initialDate)));
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [settingsBusy, setSettingsBusy] = useState(false);
-  const [settingsMessage, setSettingsMessage] = useState<string | null>(null);
-  const [settingsPassword, setSettingsPassword] = useState(() => {
-    if (typeof window === "undefined") return "";
-    return localStorage.getItem("plan_settings_password") ?? "Pielęgniarstwo";
-  });
-  const [exactGroupsText, setExactGroupsText] = useState("");
-  const [prefixesText, setPrefixesText] = useState("");
+  const plan = planQuery.data;
+  const status = statusQuery.data;
+  // Status is polled every minute, so its file descriptions are the freshest.
+  const sources = status?.sources.length ? status.sources : (plan?.sources ?? []);
+  const { refetch: refetchPlan } = planQuery;
 
+  // The server re-checks the faculty page every few minutes; whenever it reports a new
+  // version, pull the new plan right away.
   useEffect(() => {
-    const onPopState = () => {
-      setState(sanitizeState(readUrlState(initialDate)));
+    if (status?.version && plan?.version && status.version !== plan.version) {
+      void refetchPlan();
+    }
+  }, [status?.version, plan?.version, refetchPlan]);
+
+  const [toast, setToast] = useState<string | null>(null);
+  const toastTimer = useRef<number>();
+  const showToast = useCallback((message: string, ms = 8000) => {
+    setToast(message);
+    window.clearTimeout(toastTimer.current);
+    toastTimer.current = window.setTimeout(() => setToast(null), ms);
+  }, []);
+
+  const shownVersion = useRef<string | undefined>(cachedPlan?.version);
+  useEffect(() => {
+    if (!plan || plan.version === shownVersion.current) return;
+    const hadPrevious = shownVersion.current !== undefined;
+    shownVersion.current = plan.version;
+    writeStorage(PLAN_CACHE_KEY, JSON.stringify(plan));
+    if (hadPrevious) {
+      const details = plan.sources
+        .map((source) => `${source.label.toLowerCase()}${source.as_of ? ` (stan na ${shortDate(source.as_of)})` : ""}`)
+        .join(", ");
+      showToast(`Plan został zaktualizowany ze strony uczelni: ${details}.`, 12_000);
+    }
+  }, [plan, showToast]);
+
+  // ------------------------------------------------------------------ groups (remembered per device)
+
+  const [selection, setSelection] = useState<Selection>(() => (cachedPlan ? loadSelection(cachedPlan.dimensions) : {}));
+  const dimensions = useMemo(() => plan?.dimensions ?? [], [plan?.dimensions]);
+  useEffect(() => {
+    if (!dimensions.length) return;
+    setSelection(loadSelection(dimensions));
+  }, [dimensions]);
+
+  const selectOption = (dimensionId: string, value: string) => {
+    saveSelection(dimensionId, value);
+    setSelection((previous) => ({ ...previous, [dimensionId]: value }));
+  };
+
+  // ------------------------------------------------------------------ derived data
+
+  const subjects = useMemo(() => new Map((plan?.subjects ?? []).map((subject) => [subject.key, subject])), [plan?.subjects]);
+  const items = useMemo<Item[]>(
+    () => (plan?.events ?? []).filter((event) => matches(event, selection)).map((event) => decorate(event, subjects)),
+    [plan?.events, selection, subjects],
+  );
+  const byDay = useMemo(() => {
+    const map = new Map<string, Item[]>();
+    items.forEach((item) => map.set(item.e.date, [...(map.get(item.e.date) ?? []), item]));
+    return map;
+  }, [items]);
+  const range = useMemo(() => hourRange(plan), [plan]);
+  const showWeekends = useMemo(() => items.some((item) => isWeekend(parseDay(item.e.date))), [items]);
+
+  const upcoming = items.filter((item) => !item.e.cancelled && (item.e.date > today || (item.e.date === today && item.b > now.minutes)));
+  const next = upcoming[0];
+  const nextLive = Boolean(next && next.e.date === today && next.a <= now.minutes);
+
+  const { stats, hoursOnsite, hoursRemote } = useMemo(() => {
+    const totals = new Map<string, Stat>();
+    let onsite = 0;
+    let remote = 0;
+    items.forEach((item) => {
+      if (item.e.cancelled) return;
+      const stat = totals.get(item.short) ?? { short: item.short, color: item.pal.dot, hours: 0 };
+      stat.hours += item.hours;
+      totals.set(item.short, stat);
+      if (item.e.mode === "remote") remote += item.hours;
+      else onsite += item.hours;
+    });
+    return {
+      stats: [...totals.values()].sort((x, y) => y.hours - x.hours),
+      hoursOnsite: onsite,
+      hoursRemote: remote,
     };
+  }, [items]);
 
-    window.addEventListener("popstate", onPopState);
-    return () => window.removeEventListener("popstate", onPopState);
-  }, [initialDate]);
+  const months = useMemo(() => [...new Set([...byDay.keys()].map((day) => day.slice(0, 7)))].sort(), [byDay]);
+
+  // ------------------------------------------------------------------ navigation
+
+  const [view, setView] = useState<View>("tydzień");
+  const [cursor, setCursor] = useState<string | null>(null);
+  const [showPast, setShowPast] = useState(false);
+  const current = cursor ?? next?.e.date ?? today;
+  const cursorDate = parseDay(current);
+  const isDay = view === "dzień";
+  const isWeek = view === "tydzień";
+
+  const stepDay = useCallback(
+    (direction: number) => {
+      let day = shift(parseDay(current), direction);
+      for (let guard = 0; guard < 7 && isWeekend(day) && !byDay.has(isoDay(day)); guard += 1) {
+        day = shift(day, direction);
+      }
+      setCursor(isoDay(day));
+    },
+    [current, byDay],
+  );
+  const navigate = useCallback(
+    (direction: number) => {
+      if (view === "dzień") stepDay(direction);
+      else if (view === "tydzień") setCursor(isoDay(shift(parseDay(current), 7 * direction)));
+    },
+    [view, stepDay, current],
+  );
 
   useEffect(() => {
-    writeUrlState(state);
-  }, [state]);
+    const onKey = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target && /input|textarea|select/i.test(target.tagName)) return;
+      if (event.key === "ArrowLeft") navigate(-1);
+      if (event.key === "ArrowRight") navigate(1);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [navigate]);
 
-  useEffect(() => {
-    if (typeof window !== "undefined") {
-      localStorage.setItem("plan_settings_password", settingsPassword);
-    }
-  }, [settingsPassword]);
-
-  const metaQuery = useQuery({
-    queryKey: ["meta"],
-    queryFn: fetchMeta,
-    refetchInterval: 60_000,
-  });
-
-  const runtimeSettingsQuery = useQuery({
-    queryKey: ["runtime-settings"],
-    queryFn: fetchRuntimeSettings,
-    refetchInterval: 60_000,
-  });
-
-  useEffect(() => {
-    if (!runtimeSettingsQuery.data) return;
-    if (settingsOpen) return;
-    setExactGroupsText(runtimeSettingsQuery.data.magdalenka_exact_groups.join("\n"));
-    setPrefixesText(runtimeSettingsQuery.data.magdalenka_prefixes.join("\n"));
-  }, [runtimeSettingsQuery.data, settingsOpen]);
-
-  const timezone = metaQuery.data?.timezone ?? FALLBACK_TIMEZONE;
-
-  const weekQuery = useQuery({
-    queryKey: ["week", state.date, state.filters],
-    queryFn: () => fetchWeekSchedule(state.date, state.filters),
-    refetchInterval: 60_000,
-    enabled: Boolean(state.date),
-  });
-
-  const weekStart = weekQuery.data?.week_start ?? startOfWeek(state.date);
-  const daySchedule = weekQuery.data?.days.find((day) => day.date === state.date) ?? weekQuery.data?.days[0];
-
-  const errorMessage =
-    metaQuery.error instanceof Error
-      ? metaQuery.error.message
-      : weekQuery.error instanceof Error
-        ? weekQuery.error.message
-        : runtimeSettingsQuery.error instanceof Error
-          ? runtimeSettingsQuery.error.message
-          : null;
-
-  const magdalenkaEnabled = useMemo(() => state.filters.only_magdalenka, [state.filters.only_magdalenka]);
-
-  const updateDate = (date: string) => {
-    if (!date) {
-      return;
-    }
-
-    setState((previous) => ({ ...previous, date }));
+  const openDay = (day: string) => {
+    setView("dzień");
+    setCursor(day);
   };
 
-  const toggleOnlyMagdalenka = () => {
-    setState((previous) => ({
-      ...previous,
-      filters: {
-        ...previous.filters,
-        only_magdalenka: !previous.filters.only_magdalenka,
-      },
-    }));
-  };
+  const monday = mondayOf(cursorDate);
+  const friday = shift(monday, 4);
+  const weekColumns: WeekColumn[] = Array.from({ length: 7 }, (_, index) => shift(monday, index))
+    .filter((day) => !isWeekend(day) || byDay.has(isoDay(day)))
+    .map((day) => {
+      const key = isoDay(day);
+      return { day: key, wd: WD[day.getDay()], num: day.getDate(), isToday: key === today, items: byDay.get(key) ?? [] };
+    });
+  const weekDaysWithClasses = weekColumns.filter((column) => column.items.length).length;
+  const dayItems = byDay.get(current) ?? [];
+  const dayHours = dayItems.reduce((sum, item) => sum + item.hours, 0);
+  const nextAfter = items.find((item) => item.e.date > current && !item.e.cancelled);
 
-  const goToday = () => {
-    updateDate(coerceToWorkday(getTodayInTimezone(timezone)));
-  };
+  const navLabel = isDay
+    ? dayLong(current)
+    : monday.getMonth() === friday.getMonth()
+      ? `${monday.getDate()} – ${friday.getDate()} ${MONG[friday.getMonth()]}`
+      : `${monday.getDate()} ${MONG[monday.getMonth()]} – ${friday.getDate()} ${MONG[friday.getMonth()]}`;
+  const navSub = isDay
+    ? `${cursorDate.getFullYear()} · ${
+        dayItems.length
+          ? `${dayItems.length} ${plural(dayItems.length, "blok", "bloki", "bloków")} · ${fmtHours(dayHours)} h`
+          : "brak zajęć"
+      }`
+    : `${friday.getFullYear()} · ${weekDaysWithClasses} ${plural(weekDaysWithClasses, "dzień", "dni", "dni")} z zajęciami`;
+  const emptyHint = nextAfter
+    ? `Kolejne zajęcia: ${WDL[parseDay(nextAfter.e.date).getDay()]}, ${parseDay(nextAfter.e.date).getDate()} ${MONG[parseDay(nextAfter.e.date).getMonth()]}, ${clock(nextAfter.e.start)}`
+    : "To już koniec zajęć w tym semestrze.";
 
-  const goPrevWeek = () => {
-    updateDate(shiftDate(state.date, -7));
-  };
+  // ------------------------------------------------------------------ actions
 
-  const goNextWeek = () => {
-    updateDate(shiftDate(state.date, 7));
-  };
-
-  const refreshScheduleQueries = async () => {
-    await queryClient.invalidateQueries({ queryKey: ["runtime-settings"] });
-    await queryClient.invalidateQueries({ queryKey: ["meta"] });
-    await queryClient.invalidateQueries({ queryKey: ["week"] });
-  };
-
-  const saveRules = async () => {
-    if (!settingsPassword.trim()) {
-      setSettingsMessage("Uzupelnij haslo ustawien.");
-      return;
-    }
-
+  const [checking, setChecking] = useState(false);
+  const checkNow = async () => {
+    setChecking(true);
     try {
-      setSettingsBusy(true);
-      setSettingsMessage(null);
-      await updateRuntimeSettings(
-        {
-          magdalenka_exact_groups: parseListInput(exactGroupsText),
-          magdalenka_prefixes: parseListInput(prefixesText),
-        },
-        settingsPassword.trim(),
+      const accepted = await requestSync();
+      showToast(accepted ? "Sprawdzam stronę uczelni… Jeśli pojawiły się nowe pliki, plan odświeży się sam." : "Strona uczelni była sprawdzana przed chwilą.", 6000);
+      window.setTimeout(() => void statusQuery.refetch(), 4000);
+      window.setTimeout(() => void statusQuery.refetch(), 15000);
+    } catch {
+      showToast("Nie udało się połączyć z serwerem planu.");
+    } finally {
+      window.setTimeout(() => setChecking(false), 4000);
+    }
+  };
+
+  const subscribe = async () => {
+    const url = calendarUrl(selection, false);
+    try {
+      await navigator.clipboard.writeText(url);
+      showToast(
+        "Skopiowano link do kalendarza. W Kalendarzu Google: Inne kalendarze → „Z adresu URL” i wklej link. Kalendarz będzie się sam aktualizował.",
+        14_000,
       );
-      await refreshScheduleQueries();
-      setSettingsMessage("Ustawienia zapisane.");
-    } catch (error) {
-      setSettingsMessage(error instanceof Error ? error.message : "Nie udalo sie zapisac ustawien.");
-    } finally {
-      setSettingsBusy(false);
+    } catch {
+      window.prompt("Skopiuj link do subskrypcji kalendarza:", url);
     }
   };
 
-  const uploadMainFile = async (file: File) => {
-    if (!settingsPassword.trim()) {
-      setSettingsMessage("Uzupelnij haslo ustawien.");
-      return;
-    }
-    try {
-      setSettingsBusy(true);
-      setSettingsMessage(null);
-      await uploadMainScheduleFile(file, settingsPassword.trim());
-      await refreshScheduleQueries();
-      setSettingsMessage("Wgrano nowy plik planu zajec zwyklych.");
-    } catch (error) {
-      setSettingsMessage(error instanceof Error ? error.message : "Nie udalo sie wgrac pliku.");
-    } finally {
-      setSettingsBusy(false);
-    }
-  };
+  // ------------------------------------------------------------------ render
 
-  const uploadPracticalFile = async (file: File) => {
-    if (!settingsPassword.trim()) {
-      setSettingsMessage("Uzupelnij haslo ustawien.");
-      return;
-    }
-    try {
-      setSettingsBusy(true);
-      setSettingsMessage(null);
-      await uploadPracticalScheduleFile(file, settingsPassword.trim());
-      await refreshScheduleQueries();
-      setSettingsMessage("Wgrano nowy plik planu praktyk.");
-    } catch (error) {
-      setSettingsMessage(error instanceof Error ? error.message : "Nie udalo sie wgrac pliku.");
-    } finally {
-      setSettingsBusy(false);
-    }
-  };
-
-  const exactLegend = runtimeSettingsQuery.data?.magdalenka_exact_groups?.join(", ") ?? "---, rok, caly rok, wszyscy, d";
-  const prefixLegend = runtimeSettingsQuery.data?.magdalenka_prefixes?.join(", ") ?? "11, wsz";
+  const groupLabel = selectionLabel(selection, dimensions);
+  const ready = Boolean(plan);
 
   return (
-    <div className="relative min-h-screen overflow-x-hidden bg-linen text-ink">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_15%_12%,rgba(106,126,112,0.12),transparent_44%),radial-gradient(circle_at_88%_16%,rgba(141,160,177,0.14),transparent_50%),linear-gradient(180deg,#f4f1e9_0%,#f7f6f1_46%,#f1f4f4_100%)]" />
-      <div className="pointer-events-none absolute inset-0 opacity-25 [background-image:linear-gradient(90deg,rgba(18,17,15,0.035)_1px,transparent_1px),linear-gradient(rgba(18,17,15,0.035)_1px,transparent_1px)] [background-size:52px_52px]" />
+    <div className="min-h-screen bg-sand font-body text-ink">
+      <div className="mx-auto flex max-w-[1180px] flex-col gap-6 px-4 pb-[72px] pt-8 sm:px-5 sm:pt-10">
+        <Header plan={plan} sources={sources} status={status} checking={checking} onCheck={checkNow} />
 
-      <main className="relative mx-auto flex w-full max-w-[1400px] flex-col gap-5 px-4 py-4 md:px-6 md:py-6">
-        <WeekNavigator
-          selectedDate={state.date}
-          weekStart={weekStart}
-          minDate={metaQuery.data?.min_date}
-          maxDate={metaQuery.data?.max_date}
-          onPrevWeek={goPrevWeek}
-          onNextWeek={goNextWeek}
-          onToday={goToday}
-          onDateChange={updateDate}
-          onOpenSettings={() => {
-            setSettingsMessage(null);
-            setSettingsOpen(true);
-          }}
-        />
+        <Notices sources={sources} status={status} />
 
-        {errorMessage && (
-          <div className="rounded-2xl border border-red-300 bg-red-100/80 px-4 py-3 text-sm font-semibold text-red-700">
-            Nie udalo sie pobrac danych: {errorMessage}
+        {ready && <GroupPicker dimensions={dimensions} selection={selection} onSelect={selectOption} />}
+
+        {!ready && planQuery.isError && (
+          <div className="flex flex-col items-start gap-3 rounded-3xl border border-line bg-linen p-6">
+            <div className="font-heading text-xl font-bold">Nie udało się pobrać planu</div>
+            <div className="text-sm text-muted">{planQuery.error instanceof Error ? planQuery.error.message : "Błąd połączenia."}</div>
+            <button
+              type="button"
+              onClick={() => void planQuery.refetch()}
+              className="h-10 cursor-pointer rounded-full border border-rule bg-linen px-4 text-sm font-bold text-ink"
+            >
+              Spróbuj ponownie
+            </button>
           </div>
         )}
+        {!ready && !planQuery.isError && (
+          <div className="rounded-3xl border border-line bg-linen p-6 text-sm font-semibold text-muted">Ładowanie planu…</div>
+        )}
 
-        <motion.section
-          initial={{ opacity: 0, y: 8 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.25 }}
-          className="space-y-4"
-        >
-          <div className="space-y-3 rounded-3xl border border-black/10 bg-white/75 p-3 shadow-panel backdrop-blur md:p-4">
-            <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-              <div className="flex items-center gap-2">
-                <Sparkles className="h-5 w-5 text-clay" />
-                <p className="font-heading text-xl font-bold tracking-tight text-ink">Widok dnia</p>
-              </div>
-              <button
-                type="button"
-                onClick={toggleOnlyMagdalenka}
-                className={`inline-flex w-full items-center justify-between rounded-xl border px-3 py-2 text-sm font-semibold md:w-auto ${
-                  magdalenkaEnabled
-                    ? "border-clay bg-clay/10 text-clay"
-                    : "border-black/15 bg-white text-black/70 hover:bg-black/5"
-                }`}
-              >
-                <span>Tylko grupy Magdalenki</span>
-                <span className={`h-2.5 w-2.5 rounded-full ${magdalenkaEnabled ? "bg-clay" : "bg-black/25"}`} />
-              </button>
-            </div>
-            <div className="rounded-xl border border-black/10 bg-white/72 px-3 py-2 text-xs leading-5 text-black/65">
-              <span className="font-semibold text-black/72">Legenda przelacznika:</span>{" "}
-              exact: <code>{exactLegend || "-"}</code>; prefixy: <code>{prefixLegend || "-"}</code>.
-            </div>
-            <div className="rounded-2xl border border-black/10 bg-white/80 p-2.5">
-              <DayTabs weekStart={weekStart} selectedDate={state.date} onSelectDate={updateDate} />
-            </div>
-          </div>
+        {ready && (
+          <>
+            <Overview
+              next={next}
+              nextLive={nextLive}
+              today={today}
+              groupLabel={groupLabel}
+              stats={stats}
+              hoursOnsite={hoursOnsite}
+              hoursRemote={hoursRemote}
+            />
 
-          {(metaQuery.isLoading || weekQuery.isLoading) && (
-            <div className="rounded-2xl border border-black/10 bg-white/75 p-6 text-sm font-semibold text-black/55 shadow-panel">
-              Ladowanie planu...
-            </div>
+            <Toolbar
+              view={view}
+              onView={setView}
+              showPast={showPast}
+              onTogglePast={() => setShowPast((value) => !value)}
+              icsHref={calendarUrl(selection, true)}
+              onSubscribe={subscribe}
+            />
+
+            {(isDay || isWeek) && (
+              <section className="flex flex-col gap-3">
+                <Navigator
+                  label={navLabel}
+                  sub={navSub}
+                  onPrev={() => navigate(-1)}
+                  onNext={() => navigate(1)}
+                  onToday={() => setCursor(today)}
+                  onNextClass={() => next && setCursor(next.e.date)}
+                />
+                {isDay && <DayView items={dayItems} range={range} emptyHint={emptyHint} />}
+                {isWeek && <WeekView columns={weekColumns} range={range} onOpenDay={openDay} />}
+              </section>
+            )}
+
+            {view === "lista" && <ListView byDay={byDay} today={today} showPast={showPast} onOpenDay={openDay} />}
+
+            {view === "kalendarz" && (
+              <MonthView
+                byDay={byDay}
+                months={months}
+                today={today}
+                showWeekends={showWeekends}
+                legend={stats.map((stat) => ({ short: stat.short, color: stat.color }))}
+                onOpenDay={openDay}
+              />
+            )}
+          </>
+        )}
+
+        <footer className="flex flex-col gap-1.5 border-t border-[#ddd3bf] pt-5 text-[13px] leading-normal text-muted">
+          <div className="font-bold text-ink">Proszę śledzić na bieżąco plan zajęć. Uczelnia zastrzega sobie możliwość wprowadzenia zmian.</div>
+          {plan?.dimensions.some((dim) => dim.id === "group") && (
+            <div>Ćwiczenia z planu zajęć przypisane do numeru grupy (np. „1”) dotyczą obu podgrup (1a i 1b).</div>
           )}
+          {plan?.meta.notes.map((note) => <div key={note}>{note}</div>)}
+          <div>
+            Plan aktualizuje się automatycznie na podstawie plików ze{" "}
+            <a href={status?.sync.page_url ?? "https://wnoz.uni.opole.pl/plany-zajec/"} target="_blank" rel="noreferrer">
+              strony Wydziału Nauk o Zdrowiu UO
+            </a>
+            {sources.length ? ": " : "."}
+            {sources.map((source, index) => (
+              <span key={source.id}>
+                {index > 0 ? ", " : ""}
+                {source.url ? (
+                  <a href={source.url} target="_blank" rel="noreferrer">
+                    {source.name}
+                  </a>
+                ) : (
+                  source.name
+                )}
+              </span>
+            ))}
+            {sources.length ? "." : ""}
+          </div>
+        </footer>
+      </div>
 
-          {!weekQuery.isLoading && <ScheduleBoard day={daySchedule} timezone={timezone} />}
-        </motion.section>
-
-        <footer className="pb-2 pt-1 text-center text-xs font-medium tracking-wide text-black/45">Made with love.</footer>
-      </main>
-
-      <SettingsModal
-        open={settingsOpen}
-        onClose={() => setSettingsOpen(false)}
-        settings={runtimeSettingsQuery.data}
-        settingsPassword={settingsPassword}
-        onSettingsPasswordChange={setSettingsPassword}
-        exactGroupsText={exactGroupsText}
-        onExactGroupsTextChange={setExactGroupsText}
-        prefixesText={prefixesText}
-        onPrefixesTextChange={setPrefixesText}
-        onSaveRules={saveRules}
-        onUploadMainFile={uploadMainFile}
-        onUploadPracticalFile={uploadPracticalFile}
-        busy={settingsBusy}
-        message={settingsMessage}
-      />
+      <Toast message={toast} onClose={() => setToast(null)} />
     </div>
   );
 }

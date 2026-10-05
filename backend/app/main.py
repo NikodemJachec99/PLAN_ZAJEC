@@ -1,177 +1,155 @@
 from __future__ import annotations
 
-from datetime import date
+from contextlib import asynccontextmanager
 from functools import lru_cache
+import hmac
+import logging
+from typing import Any
 from urllib.parse import unquote
 import uuid
 
-from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.responses import JSONResponse, Response
+from starlette.concurrency import run_in_threadpool
 
-from .config import Settings, get_settings
-from .errors import DataSourceUnavailable
-from .filters import ScheduleFilters, build_filters
-from .models import (
-    DaySchedule,
-    ErrorResponse,
-    HealthResponse,
-    MetaResponse,
-    RuntimeSettingsResponse,
-    RuntimeSettingsUpdateRequest,
-    WeekSchedule,
-)
-from .service import ScheduleService
+from .calendar import build_ics, resolve_selection
+from .config import get_settings
+from .sync import SyncService
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+log = logging.getLogger("plan.api")
 
 
 @lru_cache
-def get_service() -> ScheduleService:
-    settings = get_settings()
-    return ScheduleService(settings=settings)
+def get_service() -> SyncService:
+    return SyncService(get_settings())
 
 
-def get_filters(
-    subject: list[str] | None = Query(default=None),
-    instructor: list[str] | None = Query(default=None),
-    room: list[str] | None = Query(default=None),
-    group: list[str] | None = Query(default=None),
-    oddzial: list[str] | None = Query(default=None),
-    type: list[str] | None = Query(default=None),
-    only_magdalenka: bool = Query(default=False),
-) -> ScheduleFilters:
-    return build_filters(
-        subject=subject,
-        instructor=instructor,
-        room=room,
-        group=group,
-        oddzial=oddzial,
-        type=type,
-        only_magdalenka=only_magdalenka,
-    )
+def require_password(x_settings_password: str | None = Header(default=None)) -> None:
+    expected = get_settings().settings_password
+    if not expected:
+        raise HTTPException(status_code=403, detail="Ręczne zmiany są wyłączone (brak SETTINGS_PASSWORD na serwerze).")
+    provided = unquote(x_settings_password or "")
+    if not hmac.compare_digest(provided.encode("utf-8"), expected.encode("utf-8")):
+        raise HTTPException(status_code=401, detail="Nieprawidłowe hasło.")
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    service = get_service()
+    service.start()
+    try:
+        yield
+    finally:
+        service.stop()
 
 
 def create_app() -> FastAPI:
-    settings: Settings = get_settings()
+    settings = get_settings()
     app = FastAPI(
-        title="Plan Zajec API",
-        version="1.0.0",
-        description="REST API for schedule data sourced from Excel files.",
+        title="Plan Zajęć API",
+        version="2.0.0",
+        description="Plan zajęć budowany automatycznie z plików publikowanych na stronie WNoZ UO.",
+        lifespan=lifespan,
     )
-
+    app.add_middleware(GZipMiddleware, minimum_size=1024)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.allowed_origins,
         allow_credentials=False,
-        allow_methods=["GET", "POST", "PUT", "OPTIONS"],
+        allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
         allow_headers=["*"],
+        expose_headers=["ETag"],
     )
 
-    def require_settings_password(
-        service: ScheduleService = Depends(get_service),
-        x_settings_password: str | None = Header(default=None),
-    ) -> None:
-        expected_password = service.settings.settings_password
-        provided_password = unquote(x_settings_password or "")
-        if provided_password != expected_password:
-            raise HTTPException(status_code=401, detail="Nieprawidlowe haslo ustawien.")
-
     @app.middleware("http")
-    async def request_id_middleware(request: Request, call_next):  # type: ignore[override]
-        request_id = request.headers.get("x-request-id") or str(uuid.uuid4())
+    async def request_id_middleware(request: Request, call_next):  # type: ignore[no-untyped-def]
+        request_id = request.headers.get("x-request-id") or uuid.uuid4().hex
         request.state.request_id = request_id
         response = await call_next(request)
         response.headers["x-request-id"] = request_id
         return response
 
-    @app.exception_handler(DataSourceUnavailable)
-    async def data_source_exception_handler(request: Request, exc: DataSourceUnavailable):
-        payload = ErrorResponse(detail=str(exc), request_id=getattr(request.state, "request_id", None))
-        return JSONResponse(status_code=503, content=payload.model_dump())
-
     @app.exception_handler(HTTPException)
-    async def http_exception_handler(request: Request, exc: HTTPException):
-        payload = ErrorResponse(detail=str(exc.detail), request_id=getattr(request.state, "request_id", None))
-        return JSONResponse(status_code=exc.status_code, content=payload.model_dump())
+    async def http_exception_handler(request: Request, exc: HTTPException):  # type: ignore[no-untyped-def]
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"detail": str(exc.detail), "request_id": getattr(request.state, "request_id", None)},
+        )
 
     @app.exception_handler(Exception)
-    async def unexpected_exception_handler(request: Request, _exc: Exception):
-        payload = ErrorResponse(
-            detail="Wewnetrzny blad serwera.",
-            request_id=getattr(request.state, "request_id", None),
+    async def unexpected_exception_handler(request: Request, exc: Exception):  # type: ignore[no-untyped-def]
+        log.exception("Unhandled error", exc_info=exc)
+        return JSONResponse(
+            status_code=500,
+            content={"detail": "Wewnętrzny błąd serwera.", "request_id": getattr(request.state, "request_id", None)},
         )
-        return JSONResponse(status_code=500, content=payload.model_dump())
 
     @app.get("/")
     def root() -> dict[str, str]:
-        return {"message": "Plan Zajec API", "docs": "/docs"}
+        return {"message": "Plan Zajęć API", "docs": "/docs"}
 
-    @app.get("/api/v1/health", response_model=HealthResponse)
-    def health(service: ScheduleService = Depends(get_service)) -> HealthResponse:
-        return service.health()
+    @app.get("/api/v1/health")
+    def health(service: SyncService = Depends(get_service)) -> dict[str, Any]:
+        snapshot = service.snapshot
+        return {
+            "status": "ok",
+            "version": snapshot.version if snapshot else None,
+            "events": len(snapshot.payload["events"]) if snapshot else 0,
+            "last_success_at": service.status.last_success_at,
+        }
 
-    @app.get("/api/v1/meta", response_model=MetaResponse)
-    def meta(service: ScheduleService = Depends(get_service)) -> MetaResponse:
-        return service.meta()
+    @app.get("/api/v1/plan")
+    def plan(request: Request, service: SyncService = Depends(get_service)) -> Response:
+        service.reload_if_changed()
+        snapshot = service.snapshot
+        if snapshot is None:
+            raise HTTPException(status_code=503, detail="Plan nie jest jeszcze dostępny.")
+        etag = f'"{snapshot.etag}"'
+        headers = {"ETag": etag, "Cache-Control": "no-cache"}
+        if etag in [tag.strip().removeprefix("W/") for tag in request.headers.get("if-none-match", "").split(",")]:
+            return Response(status_code=304, headers=headers)
+        return Response(content=snapshot.body, media_type="application/json", headers=headers)
 
-    @app.get("/api/v1/schedule/day", response_model=DaySchedule)
-    def schedule_day(
-        date_value: date = Query(alias="date"),
-        filters: ScheduleFilters = Depends(get_filters),
-        service: ScheduleService = Depends(get_service),
-    ) -> DaySchedule:
-        return service.get_day_schedule(day_date=date_value, filters=filters)
+    @app.get("/api/v1/status")
+    def status(service: SyncService = Depends(get_service)) -> JSONResponse:
+        service.reload_if_changed()
+        return JSONResponse(service.status_payload(), headers={"Cache-Control": "no-store"})
 
-    @app.get("/api/v1/schedule/week", response_model=WeekSchedule)
-    def schedule_week(
-        anchor_date: date = Query(),
-        filters: ScheduleFilters = Depends(get_filters),
-        service: ScheduleService = Depends(get_service),
-    ) -> WeekSchedule:
-        return service.get_week_schedule(anchor_date=anchor_date, filters=filters)
+    @app.post("/api/v1/sync", status_code=202)
+    def sync_now(service: SyncService = Depends(get_service)) -> JSONResponse:
+        accepted = service.request_check()
+        return JSONResponse({"accepted": accepted, **service.status_payload()}, status_code=202)
 
-    @app.get("/api/v1/settings", response_model=RuntimeSettingsResponse)
-    def get_runtime_settings(service: ScheduleService = Depends(get_service)) -> RuntimeSettingsResponse:
-        return service.get_runtime_settings()
+    @app.get("/api/v1/calendar.ics")
+    def calendar(request: Request, download: bool = False, service: SyncService = Depends(get_service)) -> Response:
+        service.reload_if_changed()
+        snapshot = service.snapshot
+        if snapshot is None:
+            raise HTTPException(status_code=503, detail="Plan nie jest jeszcze dostępny.")
+        selection = resolve_selection(snapshot.payload, dict(request.query_params))
+        body = build_ics(snapshot.payload, selection)
+        filename = "plan-zajec-" + "-".join(selection.values()).replace(" ", "_") + ".ics"
+        headers = {"Cache-Control": "no-cache"}
+        if download:
+            headers["Content-Disposition"] = f'attachment; filename="{filename}"'
+        return Response(content=body, media_type="text/calendar; charset=utf-8", headers=headers)
 
-    @app.put("/api/v1/settings", response_model=RuntimeSettingsResponse)
-    def update_runtime_settings(
-        payload: RuntimeSettingsUpdateRequest,
-        _: None = Depends(require_settings_password),
-        service: ScheduleService = Depends(get_service),
-    ) -> RuntimeSettingsResponse:
+    @app.post("/api/v1/admin/upload", dependencies=[Depends(require_password)])
+    async def admin_upload(file: UploadFile = File(...), service: SyncService = Depends(get_service)) -> dict[str, Any]:
+        content = await file.read()
         try:
-            return service.update_runtime_settings(
-                main_file=payload.main_file,
-                practical_file=payload.practical_file,
-                magdalenka_exact_groups=payload.magdalenka_exact_groups,
-                magdalenka_prefixes=payload.magdalenka_prefixes,
-            )
+            record = await run_in_threadpool(service.upload_manual, file.filename or "", content)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return {"uploaded": record.name, "kind": record.kind, **service.status_payload()}
 
-    @app.post("/api/v1/settings/files/main", response_model=RuntimeSettingsResponse)
-    async def upload_main_file(
-        file: UploadFile = File(...),
-        _: None = Depends(require_settings_password),
-        service: ScheduleService = Depends(get_service),
-    ) -> RuntimeSettingsResponse:
-        try:
-            content = await file.read()
-            return service.upload_runtime_file(kind="main", filename=file.filename or "", content=content)
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-
-    @app.post("/api/v1/settings/files/practical", response_model=RuntimeSettingsResponse)
-    async def upload_practical_file(
-        file: UploadFile = File(...),
-        _: None = Depends(require_settings_password),
-        service: ScheduleService = Depends(get_service),
-    ) -> RuntimeSettingsResponse:
-        try:
-            content = await file.read()
-            return service.upload_runtime_file(kind="practical", filename=file.filename or "", content=content)
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
+    @app.delete("/api/v1/admin/manual", dependencies=[Depends(require_password)])
+    def admin_clear_manual(service: SyncService = Depends(get_service)) -> dict[str, Any]:
+        service.clear_manual()
+        return service.status_payload()
 
     return app
 
