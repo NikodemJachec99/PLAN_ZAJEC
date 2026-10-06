@@ -1,49 +1,52 @@
 import { layoutLanes, sizeFor, type Item } from "../lib/model";
 import { CancelledBadge, summary, titleStyle } from "./EventBits";
 
-const HOUR = 80; // px per hour in the day view (design)
+const DAY_HOUR = 80; // px per hour in the day view (design)
+const HOUR_COMPACT = 64;
 
 interface DayViewProps {
   items: Item[];
   range: { start: number; end: number };
   emptyHint: string;
+  compact?: boolean;
 }
 
-export function DayView({ items, range, emptyHint }: DayViewProps) {
+export function DayView({ items, range, emptyHint, compact = false }: DayViewProps) {
+  const hour = compact ? HOUR_COMPACT : DAY_HOUR;
   const hours = Math.round((range.end - range.start) / 60);
   const labels = Array.from({ length: hours + 1 }, (_, index) => range.start / 60 + index);
 
   return (
-    <div className="rounded-3xl border border-line bg-linen py-[18px] pl-2 pr-3.5">
+    <div className={`border border-line bg-linen ${compact ? "rounded-2xl py-3 pl-1 pr-2" : "rounded-3xl py-[18px] pl-2 pr-3.5"}`}>
       <div
-        className="relative ml-14"
+        className={`relative ${compact ? "ml-9" : "ml-14"}`}
         style={{
-          height: hours * HOUR,
-          backgroundImage: `repeating-linear-gradient(to bottom,#e9e1cf 0 1px,transparent 1px ${HOUR}px)`,
+          height: hours * hour,
+          backgroundImage: `repeating-linear-gradient(to bottom,#e9e1cf 0 1px,transparent 1px ${hour}px)`,
         }}
       >
-        {labels.map((hour, index) => (
+        {labels.map((label, index) => (
           <div
-            key={hour}
-            className="tabular absolute -left-14 w-[46px] -translate-y-1/2 text-right text-xs font-bold text-faint"
-            style={{ top: index * HOUR }}
+            key={label}
+            className={`tabular absolute -translate-y-1/2 text-right font-bold text-faint ${compact ? "-left-9 w-[30px] text-[10px]" : "-left-14 w-[46px] text-xs"}`}
+            style={{ top: index * hour }}
           >
-            {hour}:00
+            {label}:00
           </div>
         ))}
 
         {layoutLanes(items).map((item) => {
-          const px = ((item.b - item.a) / 60) * HOUR;
-          const size = sizeFor(px, 250);
+          const px = ((item.b - item.a) / 60) * hour;
+          const size = sizeFor(px, compact ? 300 : 250);
           return (
             <div
               key={item.e.id}
-              className="absolute pl-2"
+              className={`absolute ${compact ? "pl-1" : "pl-2"}`}
               title={summary(item)}
               style={{
                 left: `${(item.lane / item.lanes) * 100}%`,
                 width: `${100 / item.lanes}%`,
-                top: ((item.a - range.start) / 60) * HOUR,
+                top: ((item.a - range.start) / 60) * hour,
                 height: Math.max(22, px - 3),
                 opacity: item.e.cancelled ? 0.6 : 1,
               }}
@@ -81,10 +84,13 @@ export function DayView({ items, range, emptyHint }: DayViewProps) {
                     </span>
                     <CancelledBadge item={item} />
                   </div>
-                  <div className="overflow-hidden text-ellipsis whitespace-nowrap text-[15px] font-extrabold" style={titleStyle(item)}>
+                  <div
+                    className={`text-[15px] font-extrabold ${compact ? "clamp-2 leading-tight" : "overflow-hidden text-ellipsis whitespace-nowrap"}`}
+                    style={titleStyle(item)}
+                  >
                     {item.title}
                   </div>
-                  <div className="overflow-hidden text-ellipsis whitespace-nowrap text-[13px] text-body2">
+                  <div className={`text-[13px] text-body2 ${compact ? "clamp-2" : "overflow-hidden text-ellipsis whitespace-nowrap"}`}>
                     <strong className="text-ink">{item.where}</strong>
                     {item.who ? ` · ${item.who}` : ""} {item.note ? `· ${item.note}` : ""}
                   </div>
@@ -114,7 +120,7 @@ export function DayView({ items, range, emptyHint }: DayViewProps) {
                   <div className="text-pretty text-[17px] font-extrabold leading-tight" style={titleStyle(item)}>
                     {item.title}
                   </div>
-                  <div className="grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-x-4 gap-y-2.5">
+                  <div className={`grid gap-y-2.5 ${compact ? "grid-cols-2 gap-x-3" : "grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-x-4"}`}>
                     <div className="flex flex-col gap-0.5">
                       <div className="text-[11px] font-extrabold uppercase tracking-[0.08em] text-subtle">Gdzie</div>
                       <div className="text-sm font-bold leading-[1.35]">{item.where}</div>
@@ -133,7 +139,7 @@ export function DayView({ items, range, emptyHint }: DayViewProps) {
         })}
 
         {items.length === 0 && (
-          <div className="absolute left-2 right-0 top-32 flex flex-col items-center gap-2.5 rounded-[18px] border border-dashed border-rule bg-sand p-7 text-center">
+          <div className={`absolute left-2 right-0 flex flex-col items-center gap-2.5 rounded-[18px] border border-dashed border-rule bg-sand text-center ${compact ? "top-16 p-5" : "top-32 p-7"}`}>
             <div className="font-heading text-[22px] font-extrabold">Dzień wolny od zajęć</div>
             <div className="text-sm text-muted">{emptyHint}</div>
           </div>

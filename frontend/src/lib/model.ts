@@ -189,6 +189,15 @@ export function hourRange(plan: Plan | undefined): { start: number; end: number 
   return { start, end: Math.min(end, 24 * 60) };
 }
 
+/** Hours actually used by the given events (whole hours, at least 4 h) - keeps phone views short. */
+export function visibleRange(items: Item[]): { start: number; end: number } {
+  if (!items.length) return { start: 8 * 60, end: 16 * 60 };
+  const start = Math.floor(Math.min(...items.map((item) => item.a)) / 60) * 60;
+  let end = Math.ceil(Math.max(...items.map((item) => item.b)) / 60) * 60;
+  if (end - start < 4 * 60) end = Math.min(24 * 60, start + 4 * 60);
+  return { start, end };
+}
+
 export type Size = "tiny" | "small" | "big";
 
 export function sizeFor(px: number, bigMin: number): Size {
