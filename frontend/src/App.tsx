@@ -12,8 +12,9 @@ import { Overview, type Stat } from "./components/Overview";
 import { Toolbar } from "./components/Toolbar";
 import { WeekView, type WeekColumn } from "./components/WeekView";
 import { calendarUrl, fetchPlan, fetchStatus, requestSync } from "./lib/api";
-import { decorate, hourRange, loadSelection, matches, saveSelection, selectionLabel, type Item } from "./lib/model";
-import { readJson, writeStorage } from "./lib/storage";
+import { decorate, hourRange, loadSelection, matches, saveSelection, selectionLabel, visibleRange, type Item } from "./lib/model";
+import { readJson, readStorage, writeStorage } from "./lib/storage";
+import { useCompact } from "./lib/useCompact";
 import {
   clock,
   dayLong,
@@ -46,6 +47,7 @@ function useNow() {
 
 export default function App() {
   const now = useNow();
+  const compact = useCompact();
   const today = now.today;
   const cachedPlan = useMemo(() => readJson<Plan>(PLAN_CACHE_KEY), []);
 
@@ -108,6 +110,13 @@ export default function App() {
     if (!dimensions.length) return;
     setSelection(loadSelection(dimensions));
   }, [dimensions]);
+
+  // Phones: returning visitors see their groups as one line; first-time visitors get the full picker.
+  const [pickerOpen, setPickerOpen] = useState(() => readStorage("planzp-group") === null);
+  const togglePicker = () => {
+    if (pickerOpen) Object.entries(selection).forEach(([dimensionId, value]) => saveSelection(dimensionId, value));
+    setPickerOpen(!pickerOpen);
+  };
 
   const selectOption = (dimensionId: string, value: string) => {
     saveSelection(dimensionId, value);
@@ -223,6 +232,25 @@ export default function App() {
           : "brak zajęć"
       }`
     : `${friday.getFullYear()} · ${weekDaysWithClasses} ${plural(weekDaysWithClasses, "dzień", "dni", "dni")} z zajęciami`;
+  // Desktop keeps the design's fixed 7:00-21:00 grid; phones only show the hours in use.
+  const dayRange = compact ? visibleRange(dayItems) : range;
+  const weekRange = compact ? visibleRange(weekColumns.flatMap((column) => column.items)) : range;
+
+  const swipe = useRef<{ x: number; y: number; t: number } | null>(null);
+  const onTouchStart = (event: React.TouchEvent) => {
+    const touch = event.touches[0];
+    swipe.current = { x: touch.clientX, y: touch.clientY, t: Date.now() };
+  };
+  const onTouchEnd = (event: React.TouchEvent) => {
+    const start = swipe.current;
+    swipe.current = null;
+    if (!start) return;
+    const touch = event.changedTouches[0];
+    const dx = touch.clientX - start.x;
+    const dy = touch.clientY - start.y;
+    if (Math.abs(dx) > 60 && Math.abs(dx) > 1.6 * Math.abs(dy) && Date.now() - start.t < 800) navigate(dx < 0 ? 1 : -1);
+  };
+
   const emptyHint = nextAfter
     ? `Kolejne zajęcia: ${WDL[parseDay(nextAfter.e.date).getDay()]}, ${parseDay(nextAfter.e.date).getDate()} ${MONG[parseDay(nextAfter.e.date).getMonth()]}, ${clock(nextAfter.e.start)}`
     : "To już koniec zajęć w tym semestrze.";
@@ -264,12 +292,21 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-sand font-body text-ink">
-      <div className="mx-auto flex max-w-[1180px] flex-col gap-6 px-4 pb-[72px] pt-8 sm:px-5 sm:pt-10">
+      <div className="mx-auto flex max-w-[1180px] flex-col gap-4 px-3 pb-12 pt-5 sm:gap-6 sm:px-5 sm:pb-[72px] sm:pt-10">
         <Header plan={plan} sources={sources} status={status} checking={checking} onCheck={checkNow} />
 
         <Notices sources={sources} status={status} />
 
-        {ready && <GroupPicker dimensions={dimensions} selection={selection} onSelect={selectOption} />}
+        {ready && (
+          <GroupPicker
+            dimensions={dimensions}
+            selection={selection}
+            onSelect={selectOption}
+            compact={compact}
+            open={pickerOpen}
+            onToggle={togglePicker}
+          />
+        )}
 
         {!ready && planQuery.isError && (
           <div className="flex flex-col items-start gap-3 rounded-3xl border border-line bg-linen p-6">
@@ -298,6 +335,8 @@ export default function App() {
               stats={stats}
               hoursOnsite={hoursOnsite}
               hoursRemote={hoursRemote}
+              compact={compact}
+              show={compact ? "next" : "both"}
             />
 
             <Toolbar
@@ -310,7 +349,7 @@ export default function App() {
             />
 
             {(isDay || isWeek) && (
-              <section className="flex flex-col gap-3">
+              <section className="flex flex-col gap-2.5 sm:gap-3" onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
                 <Navigator
                   label={navLabel}
                   sub={navSub}
@@ -319,8 +358,8 @@ export default function App() {
                   onToday={() => setCursor(today)}
                   onNextClass={() => next && setCursor(next.e.date)}
                 />
-                {isDay && <DayView items={dayItems} range={range} emptyHint={emptyHint} />}
-                {isWeek && <WeekView columns={weekColumns} range={range} onOpenDay={openDay} />}
+                {isDay && <DayView items={dayItems} range={dayRange} emptyHint={emptyHint} compact={compact} />}
+                {isWeek && <WeekView columns={weekColumns} range={weekRange} onOpenDay={openDay} compact={compact} />}
               </section>
             )}
 
@@ -334,12 +373,27 @@ export default function App() {
                 showWeekends={showWeekends}
                 legend={stats.map((stat) => ({ short: stat.short, color: stat.color }))}
                 onOpenDay={openDay}
+                compact={compact}
+              />
+            )}
+
+            {compact && (
+              <Overview
+                next={next}
+                nextLive={nextLive}
+                today={today}
+                groupLabel={groupLabel}
+                stats={stats}
+                hoursOnsite={hoursOnsite}
+                hoursRemote={hoursRemote}
+                compact
+                show="hours"
               />
             )}
           </>
         )}
 
-        <footer className="flex flex-col gap-1.5 border-t border-[#ddd3bf] pt-5 text-[13px] leading-normal text-muted">
+        <footer className="flex flex-col gap-1.5 border-t border-[#ddd3bf] pt-4 text-xs leading-normal text-muted sm:pt-5 sm:text-[13px]">
           <div className="font-bold text-ink">Proszę śledzić na bieżąco plan zajęć. Uczelnia zastrzega sobie możliwość wprowadzenia zmian.</div>
           {plan?.dimensions.some((dim) => dim.id === "group") && (
             <div>Ćwiczenia z planu zajęć przypisane do numeru grupy (np. „1”) dotyczą obu podgrup (1a i 1b).</div>

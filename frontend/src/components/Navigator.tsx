@@ -8,8 +8,9 @@ interface NavigatorProps {
 }
 
 const arrow =
-  "h-12 w-12 flex-none cursor-pointer rounded-full border border-rule bg-linen text-[22px] font-bold text-ink transition-colors hover:bg-ink hover:text-linen";
-const chip = "h-9 cursor-pointer rounded-full border border-rule bg-linen px-3.5 text-[13px] font-bold text-ink hover:bg-white";
+  "h-12 w-12 flex-none cursor-pointer rounded-full border border-rule bg-linen text-[22px] font-bold text-ink transition-colors hover:bg-ink hover:text-linen max-sm:h-10 max-sm:w-10 max-sm:text-xl";
+const chip =
+  "h-9 cursor-pointer rounded-full border border-rule bg-linen px-3.5 text-[13px] font-bold text-ink hover:bg-white max-sm:h-8 max-sm:px-3 max-sm:text-xs";
 
 export function Navigator({ label, sub, onPrev, onNext, onToday, onNextClass }: NavigatorProps) {
   return (
@@ -19,14 +20,14 @@ export function Navigator({ label, sub, onPrev, onNext, onToday, onNextClass }: 
           ‹
         </button>
         <div className="flex min-w-0 flex-1 flex-col items-center gap-0.5 text-center">
-          <div className="font-heading text-[clamp(20px,3vw,28px)] font-extrabold leading-[1.1] tracking-[-0.01em]">{label}</div>
-          <div className="text-[13px] font-semibold text-subtle">{sub}</div>
+          <div className="font-heading text-[clamp(18px,3vw,28px)] font-extrabold leading-[1.1] tracking-[-0.01em]">{label}</div>
+          <div className="text-xs font-semibold text-subtle sm:text-[13px]">{sub}</div>
         </div>
         <button type="button" onClick={onNext} aria-label="Dalej" className={arrow}>
           ›
         </button>
       </div>
-      <div className="flex flex-wrap justify-center gap-2">
+      <div className="flex flex-wrap justify-center gap-2 max-sm:gap-1.5">
         <button type="button" onClick={onToday} className={chip}>
           Dziś
         </button>
@@ -34,6 +35,7 @@ export function Navigator({ label, sub, onPrev, onNext, onToday, onNextClass }: 
           Najbliższe zajęcia
         </button>
         <div className="flex h-9 items-center text-xs text-subtle max-sm:hidden">Strzałki ← → na klawiaturze</div>
+        <div className="flex h-8 items-center text-[11px] text-subtle sm:hidden">Przesuń palcem ← →</div>
       </div>
     </>
   );
